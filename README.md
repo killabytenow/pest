@@ -9,14 +9,14 @@ B<TEST> is another Perl program designed for running test suites on EST
 implementations. Tests are described using TEST's test description language.
 TEST is accompanied by two test suite examples:
 
-	- /pest/test/test.conf - A complete test suite for testing an EST
-	  server supporting enrollments based on third-party CA issued
-	  certificates. This means that clients authenticate themselves using a
-	  certificate belonging to an external CA during enrollment. Once they
-	  are enrolled, re-enrollments are conducted using the EST CA.
+- /pest/test/test.conf - A complete test suite for testing an EST server
+  supporting enrollments based on third-party CA issued certificates. This
+  means that clients authenticate themselves using a certificate belonging to
+  an external CA during enrollment. Once they are enrolled, re-enrollments are
+  conducted using the EST CA.
 
-	- /pest/test/demo/demo.conf - A complete (and simpler) test suite
-	  for testing the public EST service found in http://testrfc7030.com/.
+- /pest/test/demo/demo.conf - A complete (and simpler) test suite for testing
+  the public EST service found in http://testrfc7030.com/.
 
 Both files have detailed descriptions about its format, syntax, features and
 configuration parameters.
