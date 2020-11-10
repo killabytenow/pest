@@ -7,16 +7,16 @@ Debian Packages
 
 Following list shows the required debian libraries for using this library:
 
-  deb> libconvert-asn1-perl
-  deb> libcrypt-openssl-rsa-perl
-  deb> libcrypt-openssl-pkcs10-perl
-  deb> libcrypt-openssl-x509-perl
+    deb> libconvert-asn1-perl
+    deb> libcrypt-openssl-rsa-perl
+    deb> libcrypt-openssl-pkcs10-perl
+    deb> libcrypt-openssl-x509-perl
 
 For installing these packages automatically in Debian/Ubuntu based
 distributions, please execute the following shell one-liner (in two lines):
 
-  sudo apt-get update && \
-  sudo apt-get install `grep '^ \+deb>' INSTALL.md | sed 's#^ *deb>##'`
+    sudo apt-get update && \
+    sudo apt-get install `grep '^ \+deb>' INSTALL.md | sed 's#^ *deb>##'`
 
 
 Generate documentation
