@@ -1,0 +1,1201 @@
+#!/usr/bin/perl
+#
+# pest - Perl EST client
+#
+#    Copyright (C) 2020 Gerardo García Peña <killabytenow@gmail.com>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+
+use strict;
+use warnings;
+use utf8;
+
+use Convert::ASN1 qw(:io :debug);
+use Crypt::OpenSSL::PKCS10;
+use Crypt::OpenSSL::RSA;
+use Crypt::OpenSSL::X509;
+use Data::Dumper;
+use Getopt::Long qw(:config gnu_getopt);
+use Hash::Util 'lock_keys';
+use IO::Pipe;
+use IO::Socket::SSL;
+use LWP::UserAgent;
+use MIME::Base64;
+use POSIX;
+use Pod::Usage;
+
+our $PEST_VERSION = "0.0.1";
+
+use constant EST_ASN1 =>
+q{
+	ChangeSubject ::= SEQUENCE {
+		subject     Name OPTIONAL,
+		subjectAlt  GeneralNames OPTIONAL
+	}
+
+	Name ::= CHOICE { rdnSequence  RDNSequence }
+
+	RDNSequence ::= SEQUENCE OF RelativeDistinguishedName
+
+	RelativeDistinguishedName ::=
+		SET OF AttributeTypeAndValue --SET SIZE (1 .. MAX) OF
+
+	AttributeTypeAndValue ::= SEQUENCE {
+		type   AttributeType,
+		value  AttributeValue
+	}
+
+	AttributeType ::= OBJECT IDENTIFIER
+	AttributeValue ::= DirectoryString  --ANY
+
+	DirectoryString ::= CHOICE {
+		teletexString           TeletexString,  --(SIZE (1..MAX)),
+		printableString         PrintableString,  --(SIZE (1..MAX)),
+		bmpString               BMPString,  --(SIZE (1..MAX)),
+		universalString         UniversalString,  --(SIZE (1..MAX)),
+		utf8String              UTF8String,  --(SIZE (1..MAX)),
+		ia5String               IA5String  --added for EmailAddress
+	}
+
+	GeneralNames ::= SEQUENCE OF GeneralName
+
+	GeneralName ::= CHOICE {
+		otherName                       [0]     AnotherName,
+		rfc822Name                      [1]     IA5String,
+		dNSName                         [2]     IA5String,
+		x400Address                     [3]     ANY, --ORAddress,
+		directoryName                   [4]     Name,
+		ediPartyName                    [5]     EDIPartyName,
+		uniformResourceIdentifier       [6]     IA5String,
+		IPAddress                       [7]     OCTET STRING,
+		registeredID                    [8]     OBJECT IDENTIFIER
+	}
+
+	AnotherName ::= SEQUENCE {
+		type       OBJECT IDENTIFIER,
+		value  [0] EXPLICIT ANY --DEFINED BY type-id
+	}
+
+	EDIPartyName ::= SEQUENCE {
+		nameAssigner            [0]     DirectoryString OPTIONAL,
+		partyName               [1]     DirectoryString
+	}
+
+	CsrAttrs ::= SEQUENCE OF AttrOrOID
+
+	AttrOrOID ::= CHOICE {
+		oid        OBJECT IDENTIFIER,
+		attribute  Attribute
+	}
+
+	Attribute ::= SEQUENCE {
+		type    AttributeType,
+		values  SET OF AttributeValue -- at least one value is required --
+        }
+
+	AttributeValue ::= DirectoryString  --ANY
+
+	AttributeTypeAndValue ::= SEQUENCE {
+		type    OBJECT IDENTIFIER,
+		value   AttributeValue
+        }
+};
+
+use constant SERVERKEYGEN_DEFAULT_RSA =>
+q{
+-----BEGIN RSA PRIVATE KEY-----
+MIIBOgIBAAJBANi4IWNVyIAj6/D2XXjba4AmkBLt5AB3PjiDJc33Bw53yfXwqpVH
+KyT2TRjlsR73C9oe0dmvNLP7cMa2MnzkspMCAwEAAQJAZbU8jicDOwggweyNf5vS
+fskaUpfsqj9MJy99fYUSfbni38wr9npMvAhTnv+rIdVwpRtV4f/Kd2H6JKtY9/ue
+cQIhAPgIc+5TOd1K/2d9CW2Fk1Ystx9/gbnKPj4oSwLHUBh5AiEA364wJ5Toh6ux
+1T4US6TFYTU3dpRtSGF7mOxt0c2QOGsCIGUh/TM12Cg1BkLKJufzSQogHWLIeLqq
+jgqGH1+4qR3xAiEAnqUavlgc/GzIOmhHWMdKvwFRjycCw31wfiviUBWuHnUCIG2d
+afQkE1eKadRsILrI8jETA0xW4MrOvpjDkj3Ktbeq
+-----END RSA PRIVATE KEY-----
+};
+
+my %config = (
+	timestamp_prefix        => undef,
+	ca_file                 => undef,
+	change_subject          => undef,
+	change_subject_alt      => undef,
+	client_key              => undef,
+	client_pem              => undef,
+	creds                   => undef,
+	est_host                => undef,
+	est_path                => undef,
+	est_port                => undef,
+	est_proto               => undef,
+	est_url                 => "https://testrfc7030.com:8443/.well-known/est",
+	http_basic_password     => undef,
+	http_basic_username     => undef,
+	output_directory        => undef,
+	overwrite               => undef,
+	rsa_bits                => undef,
+	subject                 => undef,
+	subject_alt             => undef,
+	verbose                 => undef,
+	debug                   => undef,
+	no_verify_hostname      => undef,
+	no_verify_certs         => undef,
+);
+lock_keys %config;
+
+sub __msglog
+{
+	my $prefix = shift;
+	my $format = shift;
+	$prefix .= ":" if($prefix);
+
+	print STDERR
+		map { "$0:$prefix $_\n" }
+		split(/\n/, join("", scalar(@_) > 0 ? sprintf($format, @_) : $format));
+}
+
+sub fat { __msglog("FAT", @_); exit(1); }
+sub err { __msglog("ERR", @_); }
+sub dbg { __msglog("DBG", @_) if($config{verbose}); }
+sub msg { __msglog("MSG", @_); }
+sub out { my $tag = shift; __msglog("OUT[$tag]", @_); }
+
+sub indent
+{
+	my $indent = shift;
+	$indent = " " x $indent;
+	return $indent . join("\n$indent", split(/\n/, join("", @_)));
+}
+
+sub create_asn1_name
+{
+	my $subject = shift;
+	my ($t, @r);
+	my %subject_fields = (
+		# ???        => { o => "2.5.4.41",                   t => "utf8String"      }, # id-at-name
+		# SURNAME    => { o => "2.5.4.4",                    t => "utf8String"      }, # id-at-surname
+		GIVENNAME    => { o => "2.5.4.42",                   t => "utf8String"      }, # id-at-givenName
+		INITIALS     => { o => "2.5.4.43",                   t => "utf8String"      }, # id-at-initials
+		GENERATION   => { o => "2.5.4.44",                   t => "utf8String"      }, # id-at-generationQualifier
+		CN           => { o => "2.5.4.3",                    t => "utf8String"      }, # id-at-commonName
+		L            => { o => "2.5.4.7",                    t => "utf8String"      }, # id-at-localityName
+		ST           => { o => "2.5.4.8",                    t => "utf8String"      }, # id-at-stateOrProvinceName
+		O            => { o => "2.5.4.10",                   t => "utf8String"      }, # id-at-organizationName
+		OU           => { o => "2.5.4.11",                   t => "utf8String"      }, # id-at-organizationalUnitName
+		T            => { o => "2.5.4.12",                   t => "utf8String"      }, # id-at-title
+		# ???        => { o => "2.5.4.46",                   t => "printableString" }, # id-at-dnQualifier
+		C            => { o => "2.5.4.6",                    t => "printableString" }, # id-at-countryName
+		SN           => { o => "2.5.4.5",                    t => "printableString" }, # id-at-serialNumber
+		# ???        => { o => "2.5.4.65",                   t => "utf8String"      }, # id-at-pseudonym
+		DC           => { o => "0.9.2342.19200300.100.1.25", t => "ia5String"       }, # id-domainComponent
+		EmailAddress => { o => "1.2.840.113549.1.9.1",       t => "ia5String"       }, # id-emailAddress
+	);
+	my $subject_field_keys_regex = join("|", keys %subject_fields);
+
+	$t = $subject;
+	while($t ne "") {
+		fat("Cannot parse subject '%s'.", $subject)
+			if($t !~ s{^	/ (?<key> $subject_field_keys_regex)
+					= (?:
+						" (?<val> (?: [^/\\"] | \\[/,=+<>#;\\"] )* ) "
+						| (?<val> (?: [^/\\]  | \\[/,=+<>#;\\"] | \\[0-9a-fA-F]{2})* )
+					)}{}gx);
+		my ($key, $val) = ($+{key}, $+{val});
+		$val =~ s/\\([0-9a-fA-F]{2})/chr hex $1/ge;
+		$val =~ s/\\([,=+<>#;"])/$1/g;
+		$val =~ s/\\\\/\\/g;
+		fat("Uknown key '%s' with value '%s' in subject '%s'.", $key, $val, $subject)
+			if(!exists($subject_fields{$key}));
+		push(@r, [ $key, $subject_fields{$key}, $val ]);
+	}
+
+	return {
+		rdnSequence => [
+			map { [ {
+				type  => $_->[1]->{o},
+				value => {
+					$_->[1]->{t} => $_->[2]
+				}
+			} ] } @r
+		]
+	};
+}
+
+sub create_asn1_general_names
+{
+	my $subject_alt = shift;
+	my ($t, @r);
+	my %subject_alt_fields = (
+		email     => { c => "rfc822Name",                f => sub { shift; }     }, # [1] rfc822Name
+		URI       => { c => "uniformResourceIdentifier", f => sub { shift; }     }, # [6] uniformResourceIdentifier
+		DNS       => { c => "dNSName",                   f => sub { shift; }     }, # [2] dNSName
+		RID       => { c => "registeredID",              f => sub { shift; }     }, # [8] registeredID
+		IP        => { c => "IPAddress",                 f => sub { shift; }     }, # [7] IPAddress
+		dirName   => { c => "directoryName",             f => \&create_asn1_name }, # [4] Name
+	#	otherName => { c => "otherName",                 f => sub { shift; }     }, # [0] otherName
+	#	x400Address                 [3]  ORAddress,
+	#	ediPartyName                [5]  EDIPartyName,
+	);
+	my $subject_alt_fields_keys_regex = join("|", keys %subject_alt_fields);
+
+	$t = $subject_alt;
+	while($t ne "") {
+		fat("Cannot parse subject '%s'.", $subject_alt)
+			if($t !~ s{^	(?<key> $subject_alt_fields_keys_regex)
+					: (?:
+						" (?<val> (?: [^,\\"] | \\" )* ) "
+						| (?<val> (?: [^,\\]  | \\, | \\[0-9a-fA-F]{2})* )
+					)
+					(?:,|$)}{}gx);
+		my ($key, $val) = ($+{key}, $+{val});
+		$val =~ s/\\([0-9a-fA-F]{2})/chr hex $1/ge;
+		$val =~ s/\\,/,/g;
+		$val =~ s/\\\\/\\/g;
+		fat("Uknown key '%s' with value '%s' in subject alt '%s'.", $key, $val, $subject_alt)
+			if(!exists($subject_alt_fields{$key}));
+		push(@r, [ $key, $subject_alt_fields{$key}, $subject_alt_fields{$key}->{f}->($val) ]);
+	}
+
+	return [ map { { $_->[1]->{c} => $_->[2] } } @r ];
+}
+
+sub create_asn1_change_subject
+{
+	my ($subject, $subject_alt) = @_;
+	my ($asn, $change_subject, $att, $enc, $dump);
+
+	$asn = Convert::ASN1->new;
+	$asn->prepare(EST_ASN1)
+		or fat("Error preparing ASN1 schema: %s", $asn->error);
+
+	$change_subject = $asn->find('ChangeSubject');
+
+	$att = { };
+	if($subject) {
+		msg("  - Requiring subject change '%s'", $subject);
+		$att->{subject} = create_asn1_name($subject);
+	}
+	if($subject_alt) {
+		msg("  - Requiring subject alternative names change '%s'", $subject_alt);
+		$att->{subjectAlt} = create_asn1_general_names($subject_alt);
+	}
+
+	$enc = $change_subject->encode($att);
+
+	if($config{debug}) {
+		if(open(my $dump_fh, '>', \$dump)) {
+			asn_dump($dump_fh, $enc);
+		}
+		dbg("ChangeSubject ASN.1 dump:\n%s", indent(4, $dump));
+	}
+
+	return $enc;
+}
+
+sub output_get_filename
+{
+	my ($filename, $mimetype) = @_;
+
+	return $config{output_directory}
+			? sprintf("%s/%s%s",
+				$config{output_directory},
+				$config{timestamp_prefix}
+			       		? POSIX::strftime("%Y%m%d_%H%M%S_", localtime)
+					: "",
+				$filename)
+			: undef;
+}
+
+sub output_write_file
+{
+	my ($filename, $mimetype, $data) = @_;
+
+	if($config{output_directory}) {
+		my $path = output_get_filename($filename, $mimetype);
+
+		msg("Writing file '%s' (%s)", $path, $mimetype || "unknown type");
+
+		fat("File '%s' already exists.", $path)
+			if(!$config{overwrite} && -e $path);
+
+		if(open(my $fd, ">", $path)) {
+			print $fd $data;
+			close($fd);
+		} else {
+			fat("Cannot write '%s': %s", $filename, $!);
+		}
+	} else {
+		my $prefix = $filename . ($mimetype ? "($mimetype)" : "");
+		if($data) {
+			out($prefix, $data);
+		} else {
+			out("$prefix/VOID", "VOID");
+		}
+	}
+}
+
+sub output_get_filename_pkcs10 { return output_get_filename(shift, "application/pkcs10"); }
+sub output_get_filename_pkey   { return output_get_filename(shift, "application/pkcs8"); }
+
+sub output_write_file_pkcs10 { my ($f, $d) = @_; return output_write_file($f, "application/pkcs10", $d); }
+sub output_write_file_pkey   { my ($f, $d) = @_; return output_write_file($f, "application/pkcs8",  $d); }
+
+sub escape_name_chars
+{
+	my $v = shift;
+	$v =~ s{([/,=+<>#;\\"])}{\\$1}g;
+	return $v;
+}
+
+sub read_config_from_certificate
+{
+	return if(!$config{client_pem});
+
+	my $x509 = Crypt::OpenSSL::X509->new_from_file($config{client_pem});
+
+	$config{subject} = $config{subject}
+		|| join("",
+			map { sprintf("/%s=%s", $_->type, escape_name_chars($_->value)) }
+				@{$x509->subject_name->entries});
+}
+
+sub load_hardcoded_rsa
+{
+	dbg("Loading hardcoded RSA key");
+
+	return Crypt::OpenSSL::RSA->new_private_key(SERVERKEYGEN_DEFAULT_RSA);
+}
+
+sub build_key_rsa
+{
+	my ($bits) = @_;
+
+	$bits = 2048 if(!$bits);
+
+	msg("Building a RSA key (%d bits)", $bits);
+
+	my $rsa = Crypt::OpenSSL::RSA->generate_key($bits, 65537);
+
+	output_write_file_pkey("public.key", $rsa->get_public_key_string);
+	output_write_file_pkey("private.key", $rsa->get_private_key_string);
+
+	return $rsa;
+}
+
+sub create_pkcs10
+{
+	my ($key, $subject, $subject_alt, $change_subject, $change_subject_alt) = @_;
+	my ($rsa, $req, $pem);
+
+	msg("Building certificate signing request");
+
+	# build CSR
+	$req = Crypt::OpenSSL::PKCS10->new_from_rsa($key);
+	$req->set_subject($subject);
+#	$req->add_ext(Crypt::OpenSSL::PKCS10::NID_key_usage,     "critical,digitalSignature,keyEncipherment");
+#	$req->add_ext(Crypt::OpenSSL::PKCS10::NID_ext_key_usage, "serverAuth, nsSGC, msSGC, 1.3.4");
+	$req->add_ext(Crypt::OpenSSL::PKCS10::NID_subject_alt_name, $subject_alt)
+		if($subject_alt);
+	$req->add_custom_ext_raw(
+			"1.3.6.1.5.5.7.7.36",
+			create_asn1_change_subject($change_subject, $change_subject_alt))
+		if($change_subject || $change_subject_alt);
+	$req->add_ext_final();
+	$req->sign();
+
+	# get CSR PEM
+	$pem = $req->get_pem_req();
+
+	# retrun
+	output_write_file_pkcs10("request.csr", $pem);
+	dbg("Certificate Signing Request dump:\n%s",
+			indent(4, call_program($pem, "openssl", "req", "-inform", "pem", "-text")))
+		if($config{debug});
+
+	return $pem;
+}
+
+sub do_est_call
+{
+	my ($method, $action, $anonymous, $content_type, $content) = @_;
+	my ($res, $req);
+
+	eval {
+		my ($ua, $ssl_opts);
+
+		# Configure TLS options
+		$ssl_opts = {
+			verify_hostname => !$config{no_verify_hostname},
+		};
+		$ssl_opts->{SSL_verify_mode} = IO::Socket::SSL::SSL_VERIFY_NONE
+			if($config{no_verify_certs});
+		$ssl_opts->{SSL_ca_file} = $config{ca_file}
+			if($config{ca_file});
+		if(!$anonymous) {
+			$ssl_opts->{SSL_cert_file} = $config{client_pem}
+				if($config{client_pem});
+			$ssl_opts->{SSL_key_file} = $config{client_key}
+				if($config{client_key});
+		}
+
+		# Create user-agent
+		$ua = LWP::UserAgent->new(ssl_opts => $ssl_opts);
+		if($config{debug}) {
+			$ua->add_handler(
+				request_send => sub
+				{
+					my ($req, $ua, $handler) = @_;
+
+					# write raw request to disk
+					output_write_file("http-request.raw", undef, $req->content);
+
+					# dump request to terminal
+					dbg("=== HTTP REQUEST ====\n%s",
+						indent(4, $req->as_string));
+
+					return undef;
+				});
+		}
+
+		# Forge request
+		$req = HTTP::Request->new(
+					$method => "$config{est_url}/$action",
+					[
+						'Content-Type'   => $content_type,
+						'Content-Length' => length($content),
+						#'Host'           => "$config{est_host}:$config{est_port}",
+					],
+					$content);
+
+		# set http basic auth credentials
+		if(!$anonymous && $config{creds}) {
+			msg("Pushing HTTP BASIC credentials");
+			$req->authorization_basic(
+				$config{http_basic_username},
+				$config{http_basic_password});
+		}
+
+		# Perform request
+		msg("Performing EST request");
+		$res = $ua->request($req);
+
+		1;
+	} or do {
+		fat("/$action failed.\nRequest: %s\nException: %s",
+			$res ? $res->status_line : "--",
+			$@ || "none");
+	};
+
+	err("/$action not succesful: %s", $res->status_line)
+		if(!$res->is_success);
+
+	if($config{debug}) {
+		# write raw request to disk
+		output_write_file("http-response.raw", undef, $res->as_string);
+
+		dbg("=== HTTP RESPONSE ====\n%s",
+				indent(4, $res ? $res->as_string : "VOID RESPONSE"))
+			if($config{debug});
+	}
+
+        return $res;
+}
+
+sub call_program
+{
+	my $data = shift;
+	my @command = @_;
+	my ($pipe_read, $pipe_write, $pid, $r, $buf, $output);
+
+	# create a pipe
+	($pipe_read, $pipe_write) = POSIX::pipe();
+
+	# forck process
+	$pid = fork;
+	fat("Cannot fork: %s", $!)
+		if(!defined($pid));
+	if(!$pid) {
+		# child process, execute program, write STDOUT to pipe
+		POSIX::close(1);
+		POSIX::dup($pipe_write);
+		POSIX::close($pipe_read);
+
+		if(open(my $fd, "|-", @command)) {
+			print $fd $data;
+			close($fd);
+			1;
+		} else {
+			fat("Cannot open '%s': %s", join(" ", @command), $!);
+		};
+
+		exit 0;
+	}
+
+	# parent pid
+	POSIX::close($pipe_write);
+	while(($r = POSIX::read($pipe_read, $buf, 1000)) > 0) {
+		$output .= $buf;
+	}
+	fat("Cannot read openssl output: $!")
+		if(!defined($r));
+
+	return $output;
+}
+
+sub extract_pkcs7_certs
+{
+	my ($r, $min, $max) = @_;
+	my ($ct, $filter, $cert, @certs, $cleared_content);
+
+	# write expected pkcs7
+	output_write_file("response.pk7", $ct, $r->content);
+
+	# check returned content type
+	$ct = $r->header("Content-Type") || "";
+	if($ct !~ m{^application/pkcs7-mime(?:;\s+smime-type=certs-only)?$}) {
+		err("Expected PKCS#7/certs-only response, but received\n"
+			  . "    Status       [%s]\n"
+			  . "    Content-type [%s]\n",
+			  $r->status_line, $ct);
+	}
+
+	# DIGICERT BUG FIX
+	$cleared_content = $r->content;
+	$cleared_content =~ s{^-----(BEGIN|END) CERTIFICATE-----$}{}gm;
+
+	# extract PKCS7/certs with openssl
+	$filter = 1;
+	$cert = "";
+	foreach my $l (
+		split(/\r?\n/,
+			call_program(
+				decode_base64($cleared_content),
+				qw(openssl pkcs7 -inform der -print_certs)))) {
+		if($l =~ /^-+ \s* BEGIN \s CERTIFICATE \s* -+$/x) {
+			$filter = 0;
+		}
+		$cert .= "$l\n" if(!$filter);
+		if($l =~ /^-+ \s* END \s CERTIFICATE \s* -+$/x) {
+			$filter = 1;
+			push(@certs, $cert);
+			$cert = "";
+		}
+	}
+
+	# check number of expected certificates
+	err("Not enough certificates were found in PKCS#7 response (found %d).", scalar(@certs))
+		if(defined($min) && scalar(@certs) < $min);
+	err("Too many certificates were found in PKCS#7 response (found %d).", scalar(@certs))
+		if(defined($max) && scalar(@certs) < $max);
+
+	# debug dump!
+	if($config{debug}) {
+		foreach my $cert (@certs) {
+			dbg("Got certificate!\n%s",
+				indent(4, call_program($certs[0], "openssl", "x509", "-inform", "pem", "-text")));
+		}
+	}
+
+	return wantarray
+		? @certs
+		: scalar(@certs) > 0
+			? $certs[0]
+			: undef;
+}
+
+sub do_est_get  { return do_est_call("GET",  @_); }
+sub do_est_post { return do_est_call("POST", @_); }
+
+sub do_cacerts
+{
+	my ($r);
+	my ($cert, $count);
+
+	# call to /cacerta
+	$r = do_est_get("cacerts", 1);
+
+	# check if success
+	fat("Cannot get certificates.")
+		if(!$r->is_success);
+
+	# write ca certs
+	$count = 1;
+	foreach $cert (extract_pkcs7_certs($r, 1)) {
+		output_write_file(
+				sprintf("ca-%03d.pem", $count),
+				"application/pkix-cert",
+				$cert);
+		$count++;
+	}
+}
+
+sub do_enroll
+{
+	my ($method, $subject, $subject_alt, $change_subject, $change_subject_alt) = @_;
+	my ($cert, $count);
+
+	# check mandatory parameters
+	fat("Need subject.") if(!$subject);
+
+	# call to /simple(re)?enroll using credentials/certs set current config
+	my $r = do_est_post(
+		$method, 0,	# /simple(re)?enroll, NOT anonymous
+		"application/pkcs10",
+		create_pkcs10(
+			build_key_rsa($config{rsa_bits}),
+			$subject,
+			$subject_alt,
+			$change_subject,
+			$change_subject_alt));
+
+	# check if success
+	fat("Cannot enroll.")
+		if(!$r->is_success);
+
+	# extract certs
+	$count = 1;
+	foreach $cert (extract_pkcs7_certs($r, 1, 1)) {
+		output_write_file(
+				sprintf("enroll-%03d.pem", $count),
+				"application/pkix-cert",
+				$cert);
+		$count++;
+	}
+}
+
+sub do_simplereenroll
+{
+	# call to /simplereenroll using credentials/certs set current config
+	do_enroll("simplereenroll",
+			$config{subject}, $config{subject_alt});
+}
+
+sub do_simpleenroll
+{
+	# call to /simpleenroll using credentials/certs set current config
+	do_enroll("simpleenroll",
+			$config{subject},        $config{subject_alt},
+			$config{change_subject}, $config{change_subject_alt});
+}
+
+sub do_serverkeygen
+{
+	my ($r);
+
+	# check mandatory parameters
+	fat("Need subject.")
+		if(!$config{subject});
+
+	# call to /serverkeygen with a bogus RSA key
+	$r = do_est_post(
+		"serverkeygen", 0,	# /serverkeygen, NOT anonymous
+		"application/pkcs10",
+		create_pkcs10(
+			load_hardcoded_rsa, # bogus key, it will be overwritten
+			$config{subject},                   # by the EST server
+			$config{subject_alt},
+			$config{change_subject},
+			$config{change_subject_alt}));
+
+	# check if success
+	fat("Cannot enroll delegating key generation.")
+		if(!$r->is_success);
+
+	# extract certs (TODO better, real processing)
+	output_write_file(
+			"serverkeygen.response",
+                        "application/binary",
+			$r->content);
+}
+
+sub do_csrattrs
+{
+	my ($r, $asn, $csrattrs);
+
+	# call to /cacerta
+	$r = do_est_get("csrattrs", 1);
+
+	# check if success
+	fat("Cannot get expected CSR attributes.")
+		if(!$r->is_success);
+
+	# check content type
+	fat("Expected 'application/csrattrs' content type, but received '%s' instead.",
+			$r->header("Content-Type"))
+		if($r->header("Content-Type") !~ m{^application/csrattrs$}i);
+
+	# save raw response
+	output_write_file(
+			"csrattrs.response",
+			$r->header("Content-Type") || "application/binary",
+			$r->content);
+
+	# base64 decoding
+	$csrattrs = decode_base64($r->content)
+		or fat("Cannot BASE64 csrattrs response.");
+
+	# try to decode ASN1 info
+	$asn = Convert::ASN1->new;
+	$asn->prepare(EST_ASN1)
+		or fat("Error preparing ASN1 schema: %s", $asn->error);
+
+	$csrattrs = $asn->find("CsrAttrs")->decode($csrattrs)
+		or fat("Cannot decode received ASN1: %s", $asn->error);
+
+	# process response
+	out("csrattrs", "CSR attributes dump:");
+	foreach my $e (@{$csrattrs}) {
+		out(exists($e->{oid})
+			? ( "csrattrs", "  OID %s", $e->{oid} )
+			: ( "csrattrs", "  ATTR{%s = %s}", $e->{att}->{type}, $e->{att}->{value} ));
+	}
+}
+
+###############################################################################
+# MAIN PROGRAM
+###############################################################################
+
+# get command line options
+GetOptions(
+	"b|rsa-bits=i"           => \$config{rsa_bits},
+	"u|creds=s"              => \$config{creds},
+	"D|debug"                =>
+		sub {
+			$config{debug} = $config{verbose} = 1;
+			$IO::Socket::SSL::DEBUG = 4;
+		},
+	"C|ca=s"                 => \$config{ca_file},
+	"k|client-key=s"         => \$config{client_key},
+	"c|client-pem=s"         => \$config{client_pem},
+	"A|change-subject-alt=s" => \$config{change_subject_alt},
+	"S|change-subject=s"     => \$config{change_subject},
+	"o|out=s"                => \$config{output_directory},
+	"a|subject-alt=s"        => \$config{subject_alt},
+	"s|subject=s"            => \$config{subject},
+	"l|url=s"                => \$config{est_url},
+	"O|overwrite"            => \$config{overwrite},
+	"t|timestamp"            => \$config{timestamp_prefix},
+	"v|verbose"              => \$config{verbose},
+	"n|no-verify-hostname"   => \$config{no_verify_hostname},
+	"N|no-verify-certs"      =>
+		sub {
+			$config{no_verify_hostname} = 1;
+			$config{no_verify_certs} = 1;
+		},
+	"h|help"                 => sub { pod2usage(-exitval => 0, -verbose => 1); },
+	"m|man"                  => sub { pod2usage(-exitval => 0, -verbose => 2); },
+	"V|version"
+		=> sub {
+			print "pest $PEST_VERSION (C) Copyright 2020 Gerardo Garcia Pena\n";
+			print "This program comes with ABSOLUTELY NO WARRANTY.\n";
+			print "Read the COPYING file for details.\n";
+			exit 0;
+		},
+
+) or pod2usage(
+		-message => "Error in command line arguments.",
+		-exitval => 1,
+		-verbose => 1,
+	);
+
+# check options and command is ok
+eval {
+	die "Need action"
+		if(scalar(@ARGV) < 1);
+	die "Too many actions"
+		if(scalar(@ARGV) > 1);
+
+	die "Cannot parse url '$config{est_url}'"
+		if($config{est_url} !~
+			m{^
+				(?:	(?<est_proto> [a-z]+) :// )?
+					(?<est_host>  [^:/]+)
+				(?: :	(?<est_port>  [1-9][0-9]*))?
+				(?:	(?<est_path>  (?: / [^?#]+)+) /?)?
+			$}xi);
+	if(defined($config{creds})) {
+		die "Cannot parse credentials '$config{creds}'."
+			if($config{creds} !~ /^([^:]*):(.*)$/);
+		$config{http_basic_username} = $1;
+		$config{http_basic_password} = $2;
+	}
+	$config{est_proto} = lc($+{est_proto} || "https");
+	$config{est_host}  = lc($+{est_host} || "");
+	$config{est_port}  = $+{est_port} || 443;
+	$config{est_path}  = $+{est_path} || "/.well-known/est";
+
+	die "Need the EST CA file."                          if(!$config{no_verify_hostname} && !$config{ca_file});
+	die "EST CA file does not exist."                    if($config{ca_file}    && ! -e $config{ca_file});
+	die "Client certificate does not exist."             if($config{client_pem} && ! -e $config{client_pem});
+	die "Client certificate private key does not exist." if($config{client_key} && ! -e $config{client_key});
+	die "Client certificate without private key."        if($config{client_pem} && !$config{client_key});
+	die "Invalid protocol '$config{est_proto}'."
+		if($config{est_proto} ne "https");
+	die "Need host."
+		if(!$config{est_host});
+
+	if($config{output_directory}) {
+		if(-e $config{output_directory}) {
+			die "Output directory '$config{output_directory}' is not a directory."
+				if(! -d $config{output_directory});
+		} else {
+			mkdir $config{output_directory}
+				or fat("Cannot create directory '%s': %s", $config{output_directory}, $!);
+		}
+	}
+
+	1;
+} or do {
+	my $m = $@;
+	chomp $m;
+	$m =~ s/ at .* line \d+\.$//;
+	$m =~ s/\.$//;
+	fat("$m. Use --help for more options.");
+};
+
+# read subject and subject_alt from client certificate (if provided)
+read_config_from_certificate;
+
+# dump parameters
+msg "Parameters:";
+foreach my $p (qw(
+			ca_file
+			client_key client_pem creds
+			est_url
+			est_proto est_host est_port est_path
+			http_basic_username http_basic_password
+			rsa_bits
+			subject subject_alt
+			change_subject change_subject_alt
+			output_directory
+			timestamp_prefix
+			overwrite
+		)) {
+	msg("	- %-20s = %s",
+			$p,
+			defined($config{$p})
+				? "<$config{$p}>"
+				: "not defined");
+}
+
+# process actions
+my $action = shift @ARGV;
+
+dbg "Action '%s'", $action;
+if   ($action eq "nop")            { msg("NOP!");    }
+elsif($action eq "cacerts")        { do_cacerts;        }
+elsif($action eq "serverkeygen")   { do_serverkeygen;   }
+elsif($action eq "simpleenroll")   { do_simpleenroll;   }
+elsif($action eq "simplereenroll") { do_simplereenroll; }
+elsif($action eq "csrattrs")       { do_csrattrs;       }
+else { fat("Unknown action '%s'.", $action); };
+
+exit 0;
+__END__
+
+=head1 NAME
+
+pest - Perl EST client
+
+=head1 SYNOPSIS
+
+=head2 Examples:
+
+  ./pest [options] [actions ...]
+  ./pest -u est-server-url -C ca.pem -o output_dir -N cacerts
+  ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir simpleenroll
+  ./pest -u est-server-url -C ca.pem -c cert -k private_key -s subject \
+         -o outdir simpleenroll # Change subject, not RFC compliant
+  ./pest -u est-server-url -C ca.pem -c cert -k private_key -S subject \
+         -o outdir simpleenroll # Change subject, RFC compliant
+  ./pest -u est-server-url -C ca.pem -c cert -k private_key \
+         -o outdir simplereenroll
+  ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir serverkeygen
+
+=head2 Options:
+
+  -b, --rsa-bits=n            Generate a RSA key of I<n> bits.
+  -u, --creds=s               Authentication credentials.
+  -D, --debug                 Enable debug information.
+  -C, --ca=s                  Path to CA PEM file with CA certificates.
+  -c, --client-pem=s          Client certificate.
+  -k, --client-key=s          Client certificate's private key.
+  -S, --change-subject=s      ChangeSubjectName.subject attribute value.
+  -A, --change-subject-alt=s  ChangeSubjectName.subjectAlt attribute value.
+  -o, --out=s                 Output directory.
+  -s, --subject=s             Set CSR subject name value.
+  -a, --subject-alt=s         Set CSR subject alt name value.
+  -u, --url=s                 EST server url.
+  -O, --overwrite             Overwrite all existing files.
+  -t, --timestamp             Prepend a timestamp on all written files.
+  -v, --verbose               Verbose messages.
+  -n, --no-verify-hostname    Do not check if the EST server hostname
+                              matches with the EST X.509 common name.
+  -N, --no-verify-certs       Do not verify EST X.509 server certificate.
+  -h, --help                  Brief help message.
+  -m, --man                   Full documentation.
+  -V, --version               Print version information.
+
+=head2 Actions:
+
+  cacerts                     Distribution of CA Certificates
+  simpleenroll                Operation for client enrollment,
+  simplereenroll              Operation for client re-enrollment.
+  serverkeygen                Enroll using a server-side generated key.
+  csrattrs                    Get CSR attributes.
+  fullcmc                     I<NOT IMPLEMENTED YET>. Full CMC proxy.
+  nop                         No operation. It does nothing, really nothing.
+
+=head1 DESCRIPTION
+
+B<PEST> is a Perl EST client designed for testing EST implementations. It is
+easily modifiable and allows supporting not-standard and extremely strict
+standard features.
+
+=head1 ACTIONS
+
+=over 8
+
+=item B<cacerts>
+
+This EST method allows an EST client, which it was not configured with an
+Implicit TA database, to bootstrap the installation of the Explicit TA database.
+
+Therefore the EST client may use the C</cacerts> response to establish an
+Explicit Trust Anchor database for subsequent TLS authentication of the EST
+server.
+
+=item B<simpleenroll>
+
+The C</simpleenroll> EST operation allows a client to request a certificate
+from the EST server with an unique HTTPS POST request.
+
+The C</simpleenroll> operation allows usage of the C<ChangeSubjectName> RFC
+7030 feature (see options I<--change-subject> and I<--change-subject-alt>) for
+choosing a new I<Subject> when authentication is done via client
+certificates. If the EST server does not support this feature, the I<--subject>
+and I<--subject-alt> parameters may be used for proposing a new subject or
+subject alternative name in the C<SubjectName> and C<SubjectAltName> CSR
+attributes.
+
+=item B<simplereenroll>
+
+The C</simplereenroll> is very similar to the C</simpleenroll> method, but it
+is designed for only allowing certificate renewals.
+
+Note that options I<--change-subject> and I<--change-subject-alt> are ignored
+by this program when using this method. Nevertheless, this program features
+that the user can still override in the CSR the expected subject name and
+subject alt name (saw during the client certificate authentication) using the
+parameters I<--subject> and I<--subject-alt>. In theory the EST server should
+prohibit changing the subject name and the subject alt name during a renewal.
+
+=item B<serverkeygen>
+
+This method is equivalent to the C</simpleenroll> operation, but the key
+information supplied in the CSR is substituted by a new key generated on the
+server side. Both, the enrolled certificate and the generated key are returned
+by the server.
+
+Support for the C</serverkeygen> function is OPTIONAL for both clients and
+servers.
+
+=item B<fullcmc>
+
+I<This feature is not implemented yet>. An EST client can request a certificate
+from an EST server with an HTTPS POST using the operation path value of
+C</fullcmc>.
+
+Support for the C</fullcmc> function is OPTIONAL for both clients and servers.
+
+=item B<csrattrs>
+
+The EST client requests a list of CA-desired CSR attributes from the CA by
+using this operation.
+
+Support for the C</csrattrs> function is OPTIONAL for both clients and servers.
+
+=item B<nop>
+
+Nothing to see here. Move along.
+
+=back
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<-b>, B<--rsa-bits>=I<n>
+
+Generate a RSA key of B<n> bits. By default 2048 bits are used.
+
+=item B<-u>, B<--creds>=I<user:pass>
+
+HTTP Basic authentication credentials used during enrollment. Credentials are
+packed using the traditional C<username:password> format.
+
+=item B<-D>, B<--debug>
+
+Dump HTTP communications and other useful debug information. This flag also enables
+verbosity (see B<-v>).
+
+=item B<-C>, B<--ca>=I<path>
+
+Path to a PEM file with all CA certificates required for authenticating TLS
+connections and validating certificates.
+
+=item B<-n>, B<--no-verify-hostname>
+
+Do not check that the EST server hostname.
+
+=item B<-N>, B<--no-verify-certs>
+
+Do not verify EST X.509 server certificates. Useful when invoking the EST
+C<cacerts> method for the first time.
+
+=item B<-c>, B<--client-pem>=I<path>
+
+Path to PEM file with the public client certificate used for authenticating to
+the EST server.
+
+=item B<-k>, B<--client-key>=I<path>
+
+Path to PEM file with the client certificate private key used for
+authenticating to the EST server.
+
+=item B<-S>, B<--change-subject>=I<new_subject>
+
+This flag sets the C<subject> value in the C<ChangeSubjectName> attribute
+extension as defined in I<RFC 6402> (Client Name Change Request attribute).
+
+=item B<-A>, B<--change-subject-alt>=I<new_subject_alt>
+
+This flag sets the C<subjectAlt> value in the C<ChangeSubjectName> attribute
+extension as defined in I<RFC 6402> (Client Name Change Request attribute).
+
+=item B<-o>, B<--out>=I<path>
+
+Output directory. Keys, certificate signing requests, certificates and raw
+responses will be written on this output directory.
+
+If no output directory is set, all data will be written to the terminal.
+
+=item B<-s>, B<--subject>=I<subject>
+
+By default the I<subject> value found in the client certificate will be used
+(see B<-c>). Nevertheless, this option allows overriding this value and force
+setting other desired subject in the Certificate Signing Request.
+
+Note that this field is mandatory if enrollment is performed without TLS client
+certificate authentication.
+
+=item B<-a>, B<--subject-alt>=I<subject_alt>
+
+By default the I<subject_alt> value found in the client certificate will be
+used (see B<-c>). Nevertheless, this option allows overriding this value and
+force setting other desired subject alt name in the Certificate Signing Request.
+
+=item B<-u>, B<--url>=I<url>
+
+URL pointing to EST server base path.
+Example: L<https://testrfc7030.com:8443/.well-known/est>
+
+=item B<-O>, B<--overwrite>
+
+Overwrite all existing files.
+
+=item B<-t>, B<--timestamp>
+
+Prepend a timestamp on all written files.
+
+=item B<-v>, B<--verbose>
+
+Verbose messages.
+
+=item B<-h>, B<--help>
+
+Print a brief help message and exits.
+
+=item B<-m>, B<--man>
+
+Prints the manual page and exits.
+
+=item B<-V>, B<--version>
+
+Print version information.
+
+=back
+
+=head1 CAVEATS
+
+=head2 DSA, ECDSA and other algorithms
+
+This program only can request RSA X.509 certificates due a limitation of
+L<Crypt::OpenSSL::PKCS10>. This module, used for creating and signing PKCS10
+documents (certificate signing requests), can only generate and use RSA keys.
+
+=head2 Method C</serverkeygen> does not parse the response
+
+This method is not completed yet and it only downloads the PKCS7 response,
+without extracting the certificate and the private key.
+
+=head2 Hardcoded RSA key for C</serverkeygen>
+
+Note than the following 512 bit RSA key is used by the method C</serverkeygen>
+as a bogus key during enrollments:
+
+  -----BEGIN RSA PRIVATE KEY-----
+  MIIBOgIBAAJBANi4IWNVyIAj6/D2XXjba4AmkBLt5AB3PjiDJc33Bw53yfXwqpVH
+  KyT2TRjlsR73C9oe0dmvNLP7cMa2MnzkspMCAwEAAQJAZbU8jicDOwggweyNf5vS
+  fskaUpfsqj9MJy99fYUSfbni38wr9npMvAhTnv+rIdVwpRtV4f/Kd2H6JKtY9/ue
+  cQIhAPgIc+5TOd1K/2d9CW2Fk1Ystx9/gbnKPj4oSwLHUBh5AiEA364wJ5Toh6ux
+  1T4US6TFYTU3dpRtSGF7mOxt0c2QOGsCIGUh/TM12Cg1BkLKJufzSQogHWLIeLqq
+  jgqGH1+4qR3xAiEAnqUavlgc/GzIOmhHWMdKvwFRjycCw31wfiviUBWuHnUCIG2d
+  afQkE1eKadRsILrI8jETA0xW4MrOvpjDkj3Ktbeq
+  -----END RSA PRIVATE KEY-----
+
+This key is hardcoded for not wasting cpu cycles and for checking easily if the
+key returned by the method C</serverkeygen> has been changed (or not). Note
+that this key is small and weak, and a compromised RSA key. For god's sake, it
+never should appear in the returned certificate.
+
+=head1 SEE ALSO
+
+=over 8
+
+=item L<RFC 6402 Certificate Management over CMS (CMC) Updates>
+
+This document contains a set of updates to the base syntax for CMC, a
+Certificate Management protocol using the Cryptographic Message Syntax (CMS).
+
+This document defines the ChangeSubjectName CSR extension used by options
+I<--change-subject> and I<--change-subject-alt>.
+
+=item L<RFC 7030 Enrollment over Secure Transport>
+
+This document profiles certificate enrollment for clients using Certificate
+Management over CMS (CMC) messages over a secure transport.  This profile,
+called Enrollment over Secure Transport (EST), describes a simple, yet
+functional, certificate management protocol targeting Public Key Infrastructure
+(PKI) clients that need to acquire client certificates and associated
+Certification Authority (CA) certificates.  It also supports client-generated
+public/private key pairs as well as key pairs generated by the CA.
+
+=item L<http://www.testrfc7030.com/>
+
+This server can be used to test the EST protocol as defined in RFC 7030.
+
+=back
+
+=cut
+

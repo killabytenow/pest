@@ -1,0 +1,340 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>pest - Perl EST client</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@localhost" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a>
+    <ul>
+      <li><a href="#Examples">Examples:</a></li>
+      <li><a href="#Options">Options:</a></li>
+      <li><a href="#Actions">Actions:</a></li>
+    </ul>
+  </li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#ACTIONS">ACTIONS</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#CAVEATS">CAVEATS</a>
+    <ul>
+      <li><a href="#DSA-ECDSA-and-other-algorithms">DSA, ECDSA and other algorithms</a></li>
+      <li><a href="#Method-serverkeygen-does-not-parse-the-response">Method /serverkeygen does not parse the response</a></li>
+      <li><a href="#Hardcoded-RSA-key-for-serverkeygen">Hardcoded RSA key for /serverkeygen</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>pest - Perl EST client</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<h2 id="Examples">Examples:</h2>
+
+<pre><code>  ./pest [options] [actions ...]
+  ./pest -u est-server-url -C ca.pem -o output_dir -N cacerts
+  ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir simpleenroll
+  ./pest -u est-server-url -C ca.pem -c cert -k private_key -s subject \
+         -o outdir simpleenroll # Change subject, not RFC compliant
+  ./pest -u est-server-url -C ca.pem -c cert -k private_key -S subject \
+         -o outdir simpleenroll # Change subject, RFC compliant
+  ./pest -u est-server-url -C ca.pem -c cert -k private_key \
+         -o outdir simplereenroll
+  ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir serverkeygen</code></pre>
+
+<h2 id="Options">Options:</h2>
+
+<pre><code>  -b, --rsa-bits=n            Generate a RSA key of I&lt;n&gt; bits.
+  -u, --creds=s               Authentication credentials.
+  -D, --debug                 Enable debug information.
+  -C, --ca=s                  Path to CA PEM file with CA certificates.
+  -c, --client-pem=s          Client certificate.
+  -k, --client-key=s          Client certificate&#39;s private key.
+  -S, --change-subject=s      ChangeSubjectName.subject attribute value.
+  -A, --change-subject-alt=s  ChangeSubjectName.subjectAlt attribute value.
+  -o, --out=s                 Output directory.
+  -s, --subject=s             Set CSR subject name value.
+  -a, --subject-alt=s         Set CSR subject alt name value.
+  -u, --url=s                 EST server url.
+  -O, --overwrite             Overwrite all existing files.
+  -t, --timestamp             Prepend a timestamp on all written files.
+  -v, --verbose               Verbose messages.
+  -n, --no-verify-hostname    Do not check if the EST server hostname
+                              matches with the EST X.509 common name.
+  -N, --no-verify-certs       Do not verify EST X.509 server certificate.
+  -h, --help                  Brief help message.
+  -m, --man                   Full documentation.
+  -V, --version               Print version information.</code></pre>
+
+<h2 id="Actions">Actions:</h2>
+
+<pre><code>  cacerts                     Distribution of CA Certificates
+  simpleenroll                Operation for client enrollment,
+  simplereenroll              Operation for client re-enrollment.
+  serverkeygen                Enroll using a server-side generated key.
+  csrattrs                    Get CSR attributes.
+  fullcmc                     I&lt;NOT IMPLEMENTED YET&gt;. Full CMC proxy.
+  nop                         No operation. It does nothing, really nothing.</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p><b>PEST</b> is a Perl EST client designed for testing EST implementations. It is easily modifiable and allows supporting not-standard and extremely strict standard features.</p>
+
+<h1 id="ACTIONS">ACTIONS</h1>
+
+<dl>
+
+<dt id="cacerts"><b>cacerts</b></dt>
+<dd>
+
+<p>This EST method allows an EST client, which it was not configured with an Implicit TA database, to bootstrap the installation of the Explicit TA database.</p>
+
+<p>Therefore the EST client may use the <code>/cacerts</code> response to establish an Explicit Trust Anchor database for subsequent TLS authentication of the EST server.</p>
+
+</dd>
+<dt id="simpleenroll"><b>simpleenroll</b></dt>
+<dd>
+
+<p>The <code>/simpleenroll</code> EST operation allows a client to request a certificate from the EST server with an unique HTTPS POST request.</p>
+
+<p>The <code>/simpleenroll</code> operation allows usage of the <code>ChangeSubjectName</code> RFC 7030 feature (see options <i>--change-subject</i> and <i>--change-subject-alt</i>) for choosing a new <i>Subject</i> when authentication is done via client certificates. If the EST server does not support this feature, the <i>--subject</i> and <i>--subject-alt</i> parameters may be used for proposing a new subject or subject alternative name in the <code>SubjectName</code> and <code>SubjectAltName</code> CSR attributes.</p>
+
+</dd>
+<dt id="simplereenroll"><b>simplereenroll</b></dt>
+<dd>
+
+<p>The <code>/simplereenroll</code> is very similar to the <code>/simpleenroll</code> method, but it is designed for only allowing certificate renewals.</p>
+
+<p>Note that options <i>--change-subject</i> and <i>--change-subject-alt</i> are ignored by this program when using this method. Nevertheless, this program features that the user can still override in the CSR the expected subject name and subject alt name (saw during the client certificate authentication) using the parameters <i>--subject</i> and <i>--subject-alt</i>. In theory the EST server should prohibit changing the subject name and the subject alt name during a renewal.</p>
+
+</dd>
+<dt id="serverkeygen"><b>serverkeygen</b></dt>
+<dd>
+
+<p>This method is equivalent to the <code>/simpleenroll</code> operation, but the key information supplied in the CSR is substituted by a new key generated on the server side. Both, the enrolled certificate and the generated key are returned by the server.</p>
+
+<p>Support for the <code>/serverkeygen</code> function is OPTIONAL for both clients and servers.</p>
+
+</dd>
+<dt id="fullcmc"><b>fullcmc</b></dt>
+<dd>
+
+<p><i>This feature is not implemented yet</i>. An EST client can request a certificate from an EST server with an HTTPS POST using the operation path value of <code>/fullcmc</code>.</p>
+
+<p>Support for the <code>/fullcmc</code> function is OPTIONAL for both clients and servers.</p>
+
+</dd>
+<dt id="csrattrs"><b>csrattrs</b></dt>
+<dd>
+
+<p>The EST client requests a list of CA-desired CSR attributes from the CA by using this operation.</p>
+
+<p>Support for the <code>/csrattrs</code> function is OPTIONAL for both clients and servers.</p>
+
+</dd>
+<dt id="nop"><b>nop</b></dt>
+<dd>
+
+<p>Nothing to see here. Move along.</p>
+
+</dd>
+</dl>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="b---rsa-bits-n"><b>-b</b>, <b>--rsa-bits</b>=<i>n</i></dt>
+<dd>
+
+<p>Generate a RSA key of <b>n</b> bits. By default 2048 bits are used.</p>
+
+</dd>
+<dt id="u---creds-user:pass"><b>-u</b>, <b>--creds</b>=<i>user:pass</i></dt>
+<dd>
+
+<p>HTTP Basic authentication credentials used during enrollment. Credentials are packed using the traditional <code>username:password</code> format.</p>
+
+</dd>
+<dt id="D---debug"><b>-D</b>, <b>--debug</b></dt>
+<dd>
+
+<p>Dump HTTP communications and other useful debug information. This flag also enables verbosity (see <b>-v</b>).</p>
+
+</dd>
+<dt id="C---ca-path"><b>-C</b>, <b>--ca</b>=<i>path</i></dt>
+<dd>
+
+<p>Path to a PEM file with all CA certificates required for authenticating TLS connections and validating certificates.</p>
+
+</dd>
+<dt id="n---no-verify-hostname"><b>-n</b>, <b>--no-verify-hostname</b></dt>
+<dd>
+
+<p>Do not check that the EST server hostname.</p>
+
+</dd>
+<dt id="N---no-verify-certs"><b>-N</b>, <b>--no-verify-certs</b></dt>
+<dd>
+
+<p>Do not verify EST X.509 server certificates. Useful when invoking the EST <code>cacerts</code> method for the first time.</p>
+
+</dd>
+<dt id="c---client-pem-path"><b>-c</b>, <b>--client-pem</b>=<i>path</i></dt>
+<dd>
+
+<p>Path to PEM file with the public client certificate used for authenticating to the EST server.</p>
+
+</dd>
+<dt id="k---client-key-path"><b>-k</b>, <b>--client-key</b>=<i>path</i></dt>
+<dd>
+
+<p>Path to PEM file with the client certificate private key used for authenticating to the EST server.</p>
+
+</dd>
+<dt id="S---change-subject-new_subject"><b>-S</b>, <b>--change-subject</b>=<i>new_subject</i></dt>
+<dd>
+
+<p>This flag sets the <code>subject</code> value in the <code>ChangeSubjectName</code> attribute extension as defined in <i>RFC 6402</i> (Client Name Change Request attribute).</p>
+
+</dd>
+<dt id="A---change-subject-alt-new_subject_alt"><b>-A</b>, <b>--change-subject-alt</b>=<i>new_subject_alt</i></dt>
+<dd>
+
+<p>This flag sets the <code>subjectAlt</code> value in the <code>ChangeSubjectName</code> attribute extension as defined in <i>RFC 6402</i> (Client Name Change Request attribute).</p>
+
+</dd>
+<dt id="o---out-path"><b>-o</b>, <b>--out</b>=<i>path</i></dt>
+<dd>
+
+<p>Output directory. Keys, certificate signing requests, certificates and raw responses will be written on this output directory.</p>
+
+<p>If no output directory is set, all data will be written to the terminal.</p>
+
+</dd>
+<dt id="s---subject-subject"><b>-s</b>, <b>--subject</b>=<i>subject</i></dt>
+<dd>
+
+<p>By default the <i>subject</i> value found in the client certificate will be used (see <b>-c</b>). Nevertheless, this option allows overriding this value and force setting other desired subject in the Certificate Signing Request.</p>
+
+<p>Note that this field is mandatory if enrollment is performed without TLS client certificate authentication.</p>
+
+</dd>
+<dt id="a---subject-alt-subject_alt"><b>-a</b>, <b>--subject-alt</b>=<i>subject_alt</i></dt>
+<dd>
+
+<p>By default the <i>subject_alt</i> value found in the client certificate will be used (see <b>-c</b>). Nevertheless, this option allows overriding this value and force setting other desired subject alt name in the Certificate Signing Request.</p>
+
+</dd>
+<dt id="u---url-url"><b>-u</b>, <b>--url</b>=<i>url</i></dt>
+<dd>
+
+<p>URL pointing to EST server base path. Example: <a href="https://testrfc7030.com:8443/.well-known/est">https://testrfc7030.com:8443/.well-known/est</a></p>
+
+</dd>
+<dt id="O---overwrite"><b>-O</b>, <b>--overwrite</b></dt>
+<dd>
+
+<p>Overwrite all existing files.</p>
+
+</dd>
+<dt id="t---timestamp"><b>-t</b>, <b>--timestamp</b></dt>
+<dd>
+
+<p>Prepend a timestamp on all written files.</p>
+
+</dd>
+<dt id="v---verbose"><b>-v</b>, <b>--verbose</b></dt>
+<dd>
+
+<p>Verbose messages.</p>
+
+</dd>
+<dt id="h---help"><b>-h</b>, <b>--help</b></dt>
+<dd>
+
+<p>Print a brief help message and exits.</p>
+
+</dd>
+<dt id="m---man"><b>-m</b>, <b>--man</b></dt>
+<dd>
+
+<p>Prints the manual page and exits.</p>
+
+</dd>
+<dt id="V---version"><b>-V</b>, <b>--version</b></dt>
+<dd>
+
+<p>Print version information.</p>
+
+</dd>
+</dl>
+
+<h1 id="CAVEATS">CAVEATS</h1>
+
+<h2 id="DSA-ECDSA-and-other-algorithms">DSA, ECDSA and other algorithms</h2>
+
+<p>This program only can request RSA X.509 certificates due a limitation of <a>Crypt::OpenSSL::PKCS10</a>. This module, used for creating and signing PKCS10 documents (certificate signing requests), can only generate and use RSA keys.</p>
+
+<h2 id="Method-serverkeygen-does-not-parse-the-response">Method <code>/serverkeygen</code> does not parse the response</h2>
+
+<p>This method is not completed yet and it only downloads the PKCS7 response, without extracting the certificate and the private key.</p>
+
+<h2 id="Hardcoded-RSA-key-for-serverkeygen">Hardcoded RSA key for <code>/serverkeygen</code></h2>
+
+<p>Note than the following 512 bit RSA key is used by the method <code>/serverkeygen</code> as a bogus key during enrollments:</p>
+
+<pre><code>  -----BEGIN RSA PRIVATE KEY-----
+  MIIBOgIBAAJBANi4IWNVyIAj6/D2XXjba4AmkBLt5AB3PjiDJc33Bw53yfXwqpVH
+  KyT2TRjlsR73C9oe0dmvNLP7cMa2MnzkspMCAwEAAQJAZbU8jicDOwggweyNf5vS
+  fskaUpfsqj9MJy99fYUSfbni38wr9npMvAhTnv+rIdVwpRtV4f/Kd2H6JKtY9/ue
+  cQIhAPgIc+5TOd1K/2d9CW2Fk1Ystx9/gbnKPj4oSwLHUBh5AiEA364wJ5Toh6ux
+  1T4US6TFYTU3dpRtSGF7mOxt0c2QOGsCIGUh/TM12Cg1BkLKJufzSQogHWLIeLqq
+  jgqGH1+4qR3xAiEAnqUavlgc/GzIOmhHWMdKvwFRjycCw31wfiviUBWuHnUCIG2d
+  afQkE1eKadRsILrI8jETA0xW4MrOvpjDkj3Ktbeq
+  -----END RSA PRIVATE KEY-----</code></pre>
+
+<p>This key is hardcoded for not wasting cpu cycles and for checking easily if the key returned by the method <code>/serverkeygen</code> has been changed (or not). Note that this key is small and weak, and a compromised RSA key. For god&#39;s sake, it never should appear in the returned certificate.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<dl>
+
+<dt id="RFC-6402-Certificate-Management-over-CMS-CMC-Updates"><a href="#RFC-6402-Certificate-Management-over-CMS-CMC-Updates">&quot;RFC 6402 Certificate Management over CMS (CMC) Updates&quot;</a></dt>
+<dd>
+
+<p>This document contains a set of updates to the base syntax for CMC, a Certificate Management protocol using the Cryptographic Message Syntax (CMS).</p>
+
+<p>This document defines the ChangeSubjectName CSR extension used by options <i>--change-subject</i> and <i>--change-subject-alt</i>.</p>
+
+</dd>
+<dt id="RFC-7030-Enrollment-over-Secure-Transport"><a href="#RFC-7030-Enrollment-over-Secure-Transport">&quot;RFC 7030 Enrollment over Secure Transport&quot;</a></dt>
+<dd>
+
+<p>This document profiles certificate enrollment for clients using Certificate Management over CMS (CMC) messages over a secure transport. This profile, called Enrollment over Secure Transport (EST), describes a simple, yet functional, certificate management protocol targeting Public Key Infrastructure (PKI) clients that need to acquire client certificates and associated Certification Authority (CA) certificates. It also supports client-generated public/private key pairs as well as key pairs generated by the CA.</p>
+
+</dd>
+<dt id="http:-www.testrfc7030.com"><a href="http://www.testrfc7030.com/">http://www.testrfc7030.com/</a></dt>
+<dd>
+
+<p>This server can be used to test the EST protocol as defined in RFC 7030.</p>
+
+</dd>
+</dl>
+
+
+</body>
+
+</html>
+
+

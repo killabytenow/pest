@@ -1,0 +1,1742 @@
+#!/usr/bin/perl
+#
+# test - test EST service
+#
+#    Copyright (C) 2020 Gerardo García Peña <killabytenow@gmail.com>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+
+use strict;
+use warnings;
+use utf8;
+
+use Data::Dumper;
+use Getopt::Long qw(:config gnu_getopt);
+use Hash::Util 'lock_keys';
+use Pod::Usage;
+use File::Path;
+
+our $TEST_VERSION = "0.0.1";
+our %TEST_STATUS_TO_TEXT = (
+	ok      => "Ok",
+	pending => "Pending",
+	failed  => "Failed",
+);
+
+my %config = (
+	ca_bits      => 2048,
+	cert_bits    => 1024,
+	certdir      => undef,
+	outdir       => undef,
+	config_files => [],
+	pest         => undef,
+	est          => {
+		ca                  => undef,
+		url                 => undef,
+		strict              => undef,
+		creds               => undef,
+		issuer_subject_name => undef,
+	},
+	certificates => [],
+	cert_by_id   => {},
+	force        => undef,
+	verbose      => undef,
+	debug        => undef,
+	test         => {},
+	hooks        => {
+		test_start         => undef,
+		test_whitelist_add => undef,
+	},
+);
+lock_keys %config;
+lock_keys %{$config{est}};
+lock_keys %{$config{hooks}};
+
+###############################################################################
+# COMMON FUNCS
+###############################################################################
+
+sub __msglog
+{
+	my $prefix = shift;
+	my $format = shift;
+	$prefix .= ":" if($prefix);
+
+	print STDERR
+		map { "$0:$prefix $_\n" }
+		split(/\n/, join("", scalar(@_) > 0 ? sprintf($format, @_) : $format || " "));
+}
+
+sub fat { __msglog("FAT", @_); exit(1); }
+sub err { __msglog("ERR", @_); }
+sub dbg { __msglog("DBG", @_) if($config{verbose}); }
+sub msg { __msglog("MSG", @_); }
+sub out { my $tag = shift; __msglog("OUT[$tag]", @_); }
+
+sub indent
+{
+	my $indent = shift;
+	$indent = " " x $indent if $indent =~ /^([1-9][0-9]|0)$/;
+	return $indent . join("\n$indent", split(/\n/, join("", @_)));
+}
+
+sub file_write
+{
+	my ($file, $data) = @_;
+	my ($fh);
+
+	msg("Creating file '%s'", $file) if ! -e $file;
+	fat("Cannot create '$file'")
+		if(!open($fh, ">", $file));
+	dbg("Writing in %s:\n%s", $file, indent("  >>", $data));
+	print $fh $data if($data);
+	close($fh);
+}
+
+sub file_read
+{
+	my $file = shift;
+	my ($fh, $data);
+
+	fat("Cannot read '$file'")
+		if(!open($fh, "<", $file));
+	$data = do { local $/; <$fh> };
+	close($fh);
+
+	return $data;
+}
+
+sub dir_create
+{
+	my $path = join("/", @_);
+	my $err;
+
+	File::Path::make_path($path, { error => \$err });
+	fat("make_path(%s): %s", $path, indent(" > ", join("\n", @{$err})))
+		if @$err;
+}
+
+sub dir_remove
+{
+	my $path = join("/", @_);
+	my $err;
+
+	File::Path::remove_tree($path, { error => \$err });
+	fat("remove_tree(%s): %s", $path, indent(" > ", join("\n", @{$err})))
+		if @$err;
+}
+
+###############################################################################
+# CONFIG LOADER
+###############################################################################
+
+sub load_configuration_file__parse_list
+{
+	my ($config_file, $fh, $v, $field, $out_allowed) = @_;
+
+	fat("%s:%d: Bad list in attribute '%s': %s",
+			$config_file, $fh->input_line_number, $field, $v)
+		if $v !~ m{^\s*(
+				\(
+					(?: \s* cert \s* = \s* [a-z0-9_.-]+        \s* , )?
+					(?: \s* cred \s* = \s* (?:\\\s+|[^,\\\s])+ \s* , )?
+					\s* (?:\\\s+|[^\)\\\s])+
+				\)
+				(?: \s* (?: > \s* [a-z0-9_.-]+ | \!\! | \+\+ ))?
+				[,\s\r\n]*
+			)*$}xis;
+
+	return [
+		map {
+			my $e = $_;
+			fat("%s:%d: Cannot parse attribute '%s': '%s'.",
+				$config_file, $fh->input_line_number, $field, $e)
+				if $e !~ m{^\(
+						(?: \s* cert \s* = \s* (?<pem> [a-z0-9_.-]+)        \s* , )?
+						(?: \s* cred \s* = \s* (?<crd> (?:\\\s+|[^,\\\s])+) \s* , )?
+						\s* (?<rsn> (?:\\\s+|[^\)\\\s])+)
+					\)
+					(?: \s* (?:
+						> \s* (?<out> [a-z0-9_.-]+)
+						| (?<out> \!\! | \+\+) ) )?
+					$}six;
+			fat("%s:%d: Output redirection not supported by field '%s'.",
+				$config_file, $fh->input_line_number)
+				if $+{out} && !$out_allowed;
+			{
+				pem => $+{pem},
+				crd => $+{crd},
+				rsn => $+{rsn},
+				$out_allowed ? (out => $+{out}) : (),
+			}
+		} $v =~ /\(
+				(?: \s* cert \s* = \s* [a-z0-9_.-]+        \s* , )?
+				(?: \s* cred \s* = \s* (?:\\\s+|[^,\\\s])+ \s* , )?
+				\s* (?:\\\s+|[^\)\\\s])+
+			\)
+			(?: \s* (?: > \s* [a-z0-9_.-]+ | \!\! | \+\+ ) )?
+			/gsix
+	];
+}
+
+sub load_configuration_file__parse_whitelist
+{
+	my ($config_file, $fh, $v) = @_;
+
+	return load_configuration_file__parse_list
+		$config_file, $fh, $v, "whitelist", 0;
+}
+
+sub load_configuration_file__parse_in
+{
+	my ($config_file, $fh, $sect, $k, $v) = @_;
+
+	return load_configuration_file__parse_list
+		$config_file, $fh, $v, "in", 1;
+}
+
+sub load_configuration_file
+{
+	my ($config_file) = @_;
+	my ($fh, $sect, $sect_name);
+
+	open($fh, "<", $config_file)
+		or fat("%s: Cannot open: %s", $config_file, $!);
+
+	$sect = \%config;
+
+	while(my $l = <$fh>) {
+		# remove trailing spaces
+		chomp $l;
+		$l =~ s/(^\s+|\s+$)//g;
+		$l =~ s/\r//gs;
+
+		# ignore void lines and comments
+		next if($l =~ /^\s*(?:\#.*)?$/);
+
+		if($l =~ m{^\s* \[ (?<sect>[^\]]+) \]  # extract section name
+				\s* (?:\#.*)?          # ignore blanks/comments
+			$}ix) {
+			$sect_name = lc($+{sect});
+			$sect = \%config;
+			foreach my $s (split(/\s+/, $sect_name)) {
+				$sect->{$s} = {} if(!exists($sect->{$s}));
+				$sect = $sect->{$s};
+			}
+			fat("%s:%d: Bad line", $config_file, $fh->input_line_number)
+				if($sect_name eq "config_files");
+		} elsif(ref($sect) eq "ARRAY") {
+			fat("%s:%d: Bad line", $config_file, $fh->input_line_number)
+				if($l !~ m{^(([^"][^\s]*|"(?:\\"|\\[^"]|[^\\"])*")(?:\s+|$))+$});
+
+			push(@{$sect}, [
+				map {
+					my $a = $_;
+					$a =~ s/(?:^\s*|\s*$)//g;
+					if($a =~ /^"(.*)"$/) {
+						$a = $1;
+						$a =~ s/\\"/"/g;
+					}
+					$a;
+				} $l =~ m{((?:[^"][^\s]*|"(?:\\"|\\[^"]|[^\\"])*")(?:\s+|$))}g
+			]);
+		} elsif(ref($sect) eq "HASH") {
+			fat("%s:%d: Bad key=val line: %s",
+					$config_file, $fh->input_line_number, $l)
+				if($l !~ m{^
+						(?<key> [^\s]+)
+						\s* = \s* 
+						(?<val> (?:[^"#][^#]*)?|"(?:\\"|\\[^"]|[^\\"])*")
+						\s* (?:\#.*)?  # ignore blanks/comments
+					$}xi);
+			my $k = lc($+{key});
+			my $v = $+{val};
+			fat("%s:%d: Option '%s' cannot be set this way.",
+					$config_file, $fh->input_line_number, $k)
+				if !$sect_name && ref($sect->{$k});
+			if($v =~ /\\$/) {
+				while(my $t = <$fh>) {
+					chomp $t;
+					$t =~ s/(^\s+|\s+$)//g;
+					$t =~ s/\r//gs;
+					$v =~ s/\s*\\$//;
+					$v .= $t ? " " . $t : "";
+					last if($t !~ /\\$/);
+				}
+			}
+			if($k eq "whitelist" && $sect_name ne "hooks") {
+				fat("%s:%d: whitelist parameter only exists in tests",
+						$config_file, $fh->input_line_number)
+					if $sect_name !~ /^test\s+[\d+.]+$/;
+
+				$sect->{$k} = load_configuration_file__parse_whitelist
+						$config_file, $fh, $v;
+			} elsif($k =~ m{(\d+)/(action|in)}) {
+				my $s;
+				$s = $1 - 1;
+				$k = $2;
+				fat("%s:%d: Bad step '%d'",
+						$config_file, $fh->input_line_number, $s)
+					if($s < 0);
+				if($k eq "in") {
+					$v = load_configuration_file__parse_in
+						$config_file, $fh, $sect, $k, $v;
+				}
+				$sect->{step}->[$s] = { id => $s }
+					if(!defined($sect->{step}->[$s]));
+				fat("%s:%d: Missing step", $config_file, $fh->input_line_number)
+					if(scalar(grep { !defined($_) } @{$sect->{step}}) > 0);
+				$sect->{step}->[$s]->{$k} = $v;
+			} else {
+				$sect->{$k} = $v;
+			}
+		} else {
+			fat("%s:%d: Uknown section type '%s' in section '%s'.",
+				$config_file,
+				$fh->input_line_number,
+				ref($sect), $sect_name);
+		}
+	}
+
+	# close config
+	close($fh);
+}
+
+sub load_configuration_files
+{
+	my $i;
+
+	# load config files
+	load_configuration_file($_)
+		foreach (@{$config{config_files}});
+
+	# do some specific changes
+	foreach my $tid (keys %{$config{test}}) {
+		$config{test}->{$tid}->{id} = $tid;
+
+		$i = 1;
+		foreach my $step (@{$config{test}->{$tid}->{step}}) {
+			foreach my $in (@{$step->{in}}) {
+				$in->{id} = $i++;
+				lock_keys %{$in};
+			}
+			lock_keys %{$step};
+		}
+		lock_keys %{$config{test}->{$tid}};
+	}
+	lock_keys %{$config{test}};
+
+	# check basic and MANDATORY parameters
+	fat("The test certificates path is a mandatory parameter.")
+		if !$config{certdir};
+	fat("The output path is a mandatory parameter.")
+		if !$config{outdir};
+
+	# fix certificates and create cert_by_id
+	# 1 - fill cert_by_id
+	foreach my $cl (@{$config{certificates}}) {
+		$cl->[1] = ($cl->[1] =~ /^y(es)?$/i);
+		$config{cert_by_id}->{$cl->[0]} =
+			{
+				# this is a permanent cert configured for all tests
+				temp      => 0,
+
+				# info about cert
+				id        => $cl->[0],
+				ca        => $cl->[1],
+				subject   => $cl->[2],
+				issuer_id => $cl->[3],
+				issuer_sn => undef,
+
+				# paths
+				pem       => "$config{certdir}/$cl->[0].pem",
+				key       => "$config{certdir}/$cl->[0].key",
+			};
+		lock_keys %{$config{cert_by_id}->{$cl->[0]}};
+	}
+
+	# 2 - get issuer subject name
+	foreach my $c (values %{$config{cert_by_id}}) {
+		$i = $c->{issuer_id} ne "-"
+			? $config{cert_by_id}->{$c->{issuer_id}}
+			: $c;
+		fat("Unknown issuer '%s' in cert '%s'.", $c->{issuer_id}, $c->{id})
+			if !$i;
+		$c->{issuer_sn} = $i->{subject};
+	}
+}
+
+###############################################################################
+# TEST DATA COMMON
+###############################################################################
+
+sub do_checkdata__entry
+{
+	my ($file, $ca, $subject, $issuer) = @_;
+	my (@cl);
+
+	$file = "$config{certdir}/$file";
+
+	push(@cl,
+		"$file.key",
+		"$file.pem");
+
+	if($ca) {
+		push(@cl,
+			"$file.serial",
+			"$file.index",
+			"$file.crlnumber",
+			"$file.rand",
+			"$file.chain.pem");
+	}
+
+	foreach my $f (@cl) {
+		fat("checkdata: File '%s' not found.", $f)
+			if(!-e $f);
+	}
+}
+
+sub do_checkdata
+{
+	foreach my $c (@{$config{certificates}}) {
+		# check certificates
+		do_checkdata__entry @{$c};
+	
+		# check info in 'cert_by_id' is correct
+		fat("Cert '%s' is not registered in 'cert_by_id'.", $c->[0])
+			if !exists($config{cert_by_id}->{$c->[0]});
+		fat("Cert '%s' references to unknown issuer '%s'.", $c->[0], $c->[3])
+			if $c->[3] ne "-"
+			&& !exists($config{cert_by_id}->{$c->[3]});
+		foreach my $ext (qw(pem key)) {
+			fat("Bad path '%s' for %s '%s' (expected %s)",
+				$c->[0],
+				$config{cert_by_id}->{$c->[0]}->{$ext},
+				uc($ext),
+				"$config{certdir}/$c->[0].$ext")
+				if $config{cert_by_id}->{$c->[0]}->{$ext}
+					ne "$config{certdir}/$c->[0].$ext";
+		}
+	}
+}
+
+###############################################################################
+# GENDATA
+###############################################################################
+
+sub exec_and_file_check
+{
+	my $file = shift;
+	my $command = join(" ", @_);
+
+	$command =~ s/[\r\n]+/ /gs;
+	$command =~ s/\s+/ /gs;
+
+	dbg("Executing: %s", $command);
+	my $output = join("", `$command`);
+
+	fat("Cannot find '$file'." . ($output ? "\nOutput:\n" . indent(">> ", $output) : ""))
+		if(! -e $file);
+
+	dbg("Output:\n" . indent(">> ", $output));
+	msg(indent(">> ", `openssl x509 -text -in "$file" 2>&1`))
+		if $file =~ /\.(crt|pem)$/;
+}
+
+sub do_gendata__clean
+{
+	my $file = shift;
+
+	msg("Cleaning files");
+	unlink map { "$file.$_" } qw(key req pem serial);
+}
+
+sub do_gendata__genrsa
+{
+	my $file = shift;
+	my $bits = shift;
+
+	exec_and_file_check(
+		"$file.key",
+		qq(openssl genrsa -out "$file.key" $bits 2>&1));
+}
+
+sub do_gendata__init_index     { my $file = shift; file_write("$file.index",     ""); }
+sub do_gendata__init_crlnumber { my $file = shift; file_write("$file.crlnumber", sprintf("%08d", 1)); }
+sub do_gendata__init_serial    { my $file = shift; file_write("$file.serial",    sprintf("%08d", 1)); }
+sub do_gendata__init_rand
+{
+	my $file = shift;
+
+	msg("Creating random source file '%s'", $file);
+	exec_and_file_check(
+		"$file.rand",
+		qq(openssl rand -out "$file.rand" 1024));
+}
+
+
+sub do_gendata__gen_ca_pem
+{
+	my ($file, $subject) = @_;;
+
+	msg("Creating CA PEM file '%s'", $file);
+	$ENV{'OPENSSL_RND'} = "$file.rand";
+	exec_and_file_check(
+		"$file.pem",
+		qq(
+		openssl req -x509 -new -nodes
+			-key "$file.key"
+			-rand "$file.rand"
+			-subj "$subject"
+			-sha256
+			-config openssl/openssl.cnf
+			-extensions v3_ca
+			-days 2048
+			-out "$file.pem"
+		));
+}
+
+sub do_gendata__gen_subca_pem
+{
+	my ($file, $subject, $issuer) = @_;;
+
+	msg("Creating SubCA PEM file '%s'", $file);
+	$ENV{'OPENSSL_RND'} = "$issuer.rand";
+	exec_and_file_check(
+		"$file.req",
+		qq(
+		openssl req
+			-new
+			-nodes
+			-key "$file.key"
+			-subj "$subject"
+			-rand "$issuer.rand"
+			-sha256
+			-config openssl/openssl.cnf
+			-extensions v3_ca
+			-out "$file.req"
+		));
+
+	exec_and_file_check(
+		"$file.pem",
+		qq(
+		openssl x509
+			-req
+			-CAserial "$issuer.serial"
+			-CA       "$issuer.pem"
+			-CAkey    "$issuer.key"
+			-rand     "$issuer.rand"
+			-sha256
+			-days 1024
+			-extfile openssl/ca.cnf
+			-in  "$file.req"
+			-out "$file.pem"
+		));
+}
+
+sub do_gendata_gen_cert_pem
+{
+	my ($file, $subject, $issuer) = @_;
+
+	msg("Creating PEM file '%s'", $file);
+	$ENV{'OPENSSL_RND'} = "$issuer.rand";
+	exec_and_file_check(
+		"$file.req",
+		qq(
+		openssl req
+			-new
+			-nodes
+			-key "$file.key"
+			-subj "$subject"
+			-rand "$issuer.rand"
+			-sha256
+			-config openssl/openssl.cnf
+			-out "$file.req"
+		));
+
+	exec_and_file_check(
+		"$file.pem",
+		qq(
+		openssl x509
+			-req
+			-CAserial "$issuer.serial"
+			-CA       "$issuer.pem"
+			-CAkey    "$issuer.key"
+			-rand     "$issuer.rand"
+			-sha256
+			-days 1024
+			-extfile openssl/cert.cnf
+			-in  "$file.req"
+			-out "$file.pem"
+		));
+}
+
+sub do_gendata__init_ca_chain_pem
+{
+	my ($file, $issuer) = @_;
+	my ($chain_pem);
+
+	$chain_pem = "";
+
+	# if parent is another CA, fetch parent chain
+	if($issuer ne "-") {
+		$chain_pem = file_read("$issuer.chain.pem");
+		$chain_pem .= "\n" if $chain_pem !~ /\n$/s;
+	}
+
+	# concat this subca pem
+	$chain_pem .= file_read("$file.pem");
+
+	file_write("$file.chain.pem", $chain_pem);
+}
+
+sub do_gendata__gen_entry
+{
+	my ($file, $ca, $subject, $issuer) = @_;
+
+	msg("=== %s ============================================================", $file);
+
+	$file = "$config{certdir}/$file";
+	$issuer = "$config{certdir}/$issuer" unless $issuer eq "-";
+
+	do_gendata__clean($file);
+
+	if($ca) {
+		# create key
+		do_gendata__genrsa($file, $config{ca_bits});
+		do_gendata__init_serial($file);
+		do_gendata__init_index($file);
+		do_gendata__init_crlnumber($file);
+		do_gendata__init_rand($file);
+		if($issuer eq "-") {
+			do_gendata__gen_ca_pem($file, $subject);
+		} else {
+			do_gendata__gen_subca_pem($file, $subject, $issuer);
+		}
+		do_gendata__init_ca_chain_pem($file, $issuer);
+	} else {
+		do_gendata__genrsa($file, $config{cert_bits});
+		do_gendata_gen_cert_pem($file, $subject, $issuer);
+	}
+}
+
+sub do_gendata
+{
+	# create certificates dir
+	dir_create($config{certdir});
+
+	# create certificates
+	do_gendata__gen_entry @{$_}
+		foreach(@{$config{certificates}});
+}
+
+###############################################################################
+# TEST COMMON
+###############################################################################
+
+sub test_get_out_dir
+{
+	my $tid = shift;
+	my $step = shift;
+	my $in = shift;
+
+	return sprintf("%s/%s",
+			$config{outdir},
+			$config{est}->{strict} ? "rfc" : "std")
+		. (defined($tid)  ? "/test-$tid"  : "")
+		. (defined($step) ? "/step-$step" : "")
+		. (defined($in)   ? "/in-$in"     : "");
+}
+
+sub test_get_file
+{
+	my $tid  = shift;
+	my $step = shift;
+	my $in   = shift;
+	my $file = shift;
+	
+	return test_get_out_dir($tid, $step, $in)
+		. (defined($file) ? "/$file" : "");
+}
+
+sub test_get_status
+{
+	my $tid = shift;
+	my ($l, $status);
+
+	if(open(my $fh, "<", test_get_file($tid, undef, undef, "status"))) {
+		$l = <$fh>;
+		close($fh);
+		chomp $l;
+		fat("$tid: Malformed status line '$l'.")
+			if($l !~ m{^
+					(?<status>[^ ]+)
+					\s+
+					(?<msg>.*)
+				$}x);
+		$status = { %+ };
+		fat("$tid: Unknown status '$status->{status}'.")
+			if(!exists($TEST_STATUS_TO_TEXT{$status->{status}}));
+	} else {
+		my $t = $!;
+		$status = {
+			status => -e test_get_file($tid, undef, undef, "status")
+					? "ERROR" : "pending",
+			msg    => $t,
+		};
+	}
+
+	return $status;
+}
+
+sub test_set_status
+{
+	my ($status, $tid, $msg) = @_;
+
+	out("test/$tid", "WRITING STATUS: %s(%s)", $status, $msg || "");
+	file_write(
+		test_get_file($tid, undef, undef, "status"),
+		sprintf("%s %s", $status, $msg || ""));
+}
+
+###############################################################################
+# RUN TEST
+###############################################################################
+
+sub do_run_test_enroll
+{
+	my ($test, $step, $in, $wl, @pars) = @_;
+	my ($od, $cred, $cert);
+
+	msg("Running step/enroll '%s/%s'", $step->{id}, $in->{id});
+
+	# get test/step/in output dir
+	$od = test_get_out_dir($test->{id}, $step->{id}, $in->{id});
+	dir_create($od);
+
+	# add basic parameters for enrollment
+	push(@pars,
+		-o => $od,
+		-b => $config{cert_bits});
+
+	# push enrollment (or global) credentials parameter (if required)
+	$cred = $config{est}->{creds}
+		if defined($config{est}->{creds});
+	$cred = $in->{crd}
+		if defined($in->{crd});
+	push(@pars, -u => $cred)
+		if defined($cred);
+
+	# if enrollment is based on cert authentication, add correct params
+	if(defined($in->{pem})) {
+		$cert = $config{cert_by_id}->{$in->{pem}};
+		fat("Unknown cert '%s' referenced on test %s, step %s, in %s",
+			$in->{pem}, $test->{id}, $step->{id}, $in->{id})
+			if !$cert;
+		push(@pars,
+			-c => $cert->{pem},
+			-k => $cert->{key});
+	}
+
+	# set Requested Subject Name (strict vs common std)
+	if($config{est}->{strict} && $cert) {
+		push(@pars,
+			-s => $cert->{subject},
+			-S => $in->{rsn});
+	} else {
+		push(@pars, -s => $in->{rsn});
+	}
+
+	# decide (according to whitelist) if this enrollment must be succesful (or not)
+	my $expected_result = 0;
+	for(my $i = 0; $i < scalar(@{$wl}); $i++) {
+		if((!$wl->[$i]->{crd} || ($wl->[$i]->{crd} eq $in->{crd}))
+		&& (!$wl->[$i]->{pem} || ($wl->[$i]->{pem} eq $in->{pem}))
+		&& $wl->[$i]->{rsn} eq $in->{rsn}) {
+			# 1 - this enrollment is authorized!
+			$expected_result = 1;
+
+			# 2 - remove this entry from whitelist
+			splice @{$wl}, $i, 1;
+
+			last;
+		}
+	}
+	if(defined($in->{out}) && $in->{out} =~ /^(!!|\+\+)$/) {
+		my $explicit_result = $in->{out} eq "++";
+		fat("Calculated expected result is %s, but expected EXPLICIT result is %s",
+			$expected_result ? "SUCCESS" : "FAIL",
+			$explicit_result ? "SUCCESS" : "FAIL")
+		if($expected_result != $explicit_result);
+	}
+
+	msg("Command: %s", join(" ", $config{pest}, @pars, $step->{action}));
+	my $result = !system($config{pest}, @pars, @pars, $step->{action});
+
+	if($result) {
+		my $pem = test_get_file(
+				$test->{id}, $step->{id}, $in->{id},
+				"enroll-001.pem");
+		my $enrolled_sn = `openssl x509 -in "$pem" -subject -noout -nameopt compat`;
+		$enrolled_sn =~ s/[\r\n]+$//si;
+		$enrolled_sn =~ s/^subject=//i;
+		die "Requested SN '$in->{rsn}' does not match with got SN '$enrolled_sn'."
+			if($in->{rsn} ne $enrolled_sn);
+	}
+
+	if($in->{out} && $in->{out} !~ /^(!!|\+\+)$/) {
+		die "This enrollment has failed, but succesful output was expected."
+			if(!$result);
+		die "Unexpected certificate '$in->{out}'."
+			unless exists($config{cert_by_id}->{$in->{out}});
+		$cert = $config{cert_by_id}->{$in->{out}};
+		foreach my $e ([ pem => "enroll-001"], [ key => "private" ]) {
+			$cert->{$e->[0]} = test_get_file(
+						$test->{id}, $step->{id}, $in->{id},
+						"$e->[1].$e->[0]");
+			die "File '$cert->{$e->[0]}' not found."
+				if(! -e $cert->{$e->[0]});
+		}
+		msg "Registered cert '%s' (pem=%s) (key=%s)",
+			$in->{out}, $cert->{pem}, $cert->{key};
+	}
+
+	die sprintf("Action %s using '%s', requesting '%s' expected to %s, but %s instead.",
+			$step->{action},
+			join(", ",
+				$in->{pem} ? ("cert=$in->{pem}") : (),
+				$in->{crd} ? ("cred=$in->{crd}") : ()),
+			$in->{rsn},
+			$expected_result ? "be succesful" : "fail",
+			$result          ? "worked"       : "failed")
+		if $result != $expected_result;
+}
+
+sub do_run_test_command
+{
+	my ($test, $step, $wl, @pars) = @_;
+	my ($od);
+
+	# get test/step/in output dir
+	$od = test_get_out_dir($test->{id}, $step->{id});
+	dir_create($od);
+	push(@pars, -o => $od);
+
+	# push EST credentials (if defined)
+	push(@pars, -u => $config{est}->{creds})
+		if($config{est}->{creds});
+
+	# invoke command
+	msg("Command: %s", join(" ", $config{pest}, @pars, $step->{action}));
+	die "Failed action /$step->{action} in step $step->{id}"
+		if(system($config{pest}, @pars, $step->{action}));
+}
+
+sub do_run_test
+{
+	my $test = shift;
+	my $status = test_get_status($test->{id});
+	my $error;
+
+	if($status->{status} eq "ok" && !$config{force}) {
+		msg("Test already passed. Use force flag for running it again.");
+		return;
+	}
+
+	out("test/$test->{id}", "Running test '%s' %s.",
+		$test->{title},
+		{
+			ERROR   => "from an error state"
+				. ($status->{msg} ? " ($status->{msg})" : ""),
+			failed  => "repeating it from a previous failure state"
+				. ($status->{msg} ? " ($status->{msg})" : ""),
+			ok      => "again",
+			pending => "for the first time",
+		}->{$status->{status}});
+
+	# remove/create test output dir
+	dir_remove(test_get_out_dir($test->{id}));
+	dir_create(test_get_out_dir($test->{id}));
+
+	# load future certs in 'cert_by_id'
+	# (clean previous test output certs)
+	foreach my $v (grep { $_->{temp} } values %{$config{cert_by_id}}) {
+		delete $config{cert_by_id}->{$v->{id}};
+	}
+
+	# (load new)
+	foreach my $step (@{$test->{step}}) {
+		foreach my $in (grep { defined($_->{out}) } @{$step->{in}}) {
+			$config{cert_by_id}->{$in->{out}} = {
+				# this is a temporary cert
+				temp => 1,
+
+				# info about cert
+				id        => $in->{out},
+				ca        => 0,
+				subject   => $in->{rsn},
+				issuer_id => "ESTCA",
+				issuer_sn => $config{est}->{issuer_subject_name},
+
+				# paths
+				pem       => test_get_file(
+						$test->{id}, $step->{id}, $in->{id},
+						"enroll-001.pem"),
+				key       => test_get_file(
+						$test->{id}, $step->{id}, $in->{id},
+						"enroll-001.key"),
+			};
+			lock_keys %{$config{cert_by_id}->{$in->{out}}};
+		}
+	}
+
+	# init a copy of the whitelist (it will be modified during this test)
+	my $wl = [ @{$test->{whitelist}} ];
+
+	eval {
+		# hook: start
+		die "hook_test_start"
+			if($config{hooks}->{test_start}
+			&& system($config{hooks}->{test_start}, $test->{id}));
+
+		# hook: whitelist
+		if($config{hooks}->{test_whitelist_add}) {
+			my $cert;
+			foreach my $we (@{$wl}) {
+				undef $cert;
+				if(defined($we->{pem})) {
+					fat("Not existing certificate '%s' referenced.", $we->{pem})
+						if !exists($config{cert_by_id}->{$we->{pem}});
+					$cert = $config{cert_by_id}->{$we->{pem}};
+				}
+				die "hook_test_whitelist_add"
+					if(system($config{hooks}->{test_whitelist_add},
+						$test->{id},
+						$cert && $cert->{id}        || "",
+						$cert && $cert->{subject}   || "",
+						$cert && $cert->{issuer_id} || "",
+						$cert && $cert->{issuer_sn} || "",
+						$we->{crd} || "",
+						$we->{rsn}));
+			}
+		}
+
+		# perform actions
+		foreach my $step (@{$test->{step}}) {
+			# common parameters (for PEST)
+			my @pars = (
+				-C => $config{est}->{ca},
+				-l => $config{est}->{url},
+				"-O",
+			);
+			push(@pars, "-v")
+				if($config{verbose});
+			push(@pars, "-D")
+				if($config{debug});
+
+			msg("Running step '%s'", $step->{id});
+			if(scalar(@{$step->{in}}) == 0) {
+				do_run_test_command $test, $step, $wl, @pars;
+			} else {
+				do_run_test_enroll $test, $step, $_, $wl, @pars
+					foreach (@{$step->{in}});
+			}
+		}
+
+		1;
+	} or do {
+		$error = $@;
+		chomp $error;
+		$error =~ s/ at .* line \d+\.$//;
+		$error =~ s/\.$//;
+	};
+
+	test_set_status(
+		defined($error)
+			? (failed => $test->{id}, $error)
+			: (ok     => $test->{id}));
+
+	return !$error;
+}
+
+sub do_run
+{
+	my @tests = @_;
+
+	# check test data is available
+	do_checkdata;
+
+	# basic check
+	fat("Use keyword 'all' or pass a list of tests identifiers.")
+		if !scalar(@tests);
+
+	# expand if 'all'
+	@tests = sort keys %{$config{test}}
+		if(scalar(@tests) == 1 && $tests[0] =~ /^all$/i);
+
+	# run tests
+	foreach my $tid (@tests) {
+		fat("Test '%s' does not exist.", $tid)
+			if !exists $config{test}->{$tid};
+		out("test/$tid",
+			do_run_test($config{test}->{$tid})
+				? "Test finished succesfully."
+				: "TEST FAILED.");
+	}
+}
+
+###############################################################################
+# LIST TESTS
+###############################################################################
+
+sub do_list
+{
+	# check test data is available
+	do_checkdata;
+
+	out("list", "TEST LIST FOR MODE <%s>",
+		$config{est}->{strict} ? "RFC7030 strict" : "defacto standard");
+	out("list");
+	out("list", "id    steps  status   title");
+	out("list", "----- ------ -------- --------------------------------------------------------");
+	foreach my $t (sort { $a->{id} cmp $b->{id} } values %{$config{test}}) {
+		out("list", "%-5s %6d %-8s %s",
+			$t->{id},
+			scalar(@{$t->{step}}),
+			(test_get_status($t->{id}))->{status},
+			$t->{title});
+	}
+}
+
+###############################################################################
+# CLEAN TEST OUTPUT // GENERATED DATA
+###############################################################################
+
+sub do_clean
+{
+	my $all = shift;
+
+	fat("The clean command only works if 'force' mode is enabled (-f flag).")
+		if($all && !$config{force});
+
+	msg("Removing tests output in directory '%s'", test_get_out_dir);
+	dir_remove(test_get_out_dir);
+
+	if($all) {
+		msg("Removing generated data in directory '%s'", $config{certdir});
+		dir_remove($config{certdir});
+	}
+}
+
+###############################################################################
+# MAIN PROGRAM
+###############################################################################
+
+# get command line options
+GetOptions(
+	"c|config=s"    => sub { my ($p, $v) = @_; push(@{$config{config_files}}, $v); },
+	"D|debug"       => sub { $config{debug} = $config{verbose} = 1; },
+	"f|force"       => \$config{force},
+	"h|help"        => sub { pod2usage(-exitval => 0, -verbose => 1); },
+	"m|man"         => sub { pod2usage(-exitval => 0, -verbose => 2); },
+	"s|est-strict"  => \$config{est}->{strict},
+	"v|verbose"     => \$config{verbose},
+	"V|version"
+		=> sub {
+			print "test $TEST_VERSION (C) Copyright 2020 Gerardo Garcia Pena\n";
+			print "This program comes with ABSOLUTELY NO WARRANTY.\n";
+			print "This is free software, and you are welcome to redistribute it\n";
+			print "under certain conditions. Read the COPYING file for details.\n";
+			exit 0;
+		},
+
+) or pod2usage(
+		-message => "Error in command line arguments.",
+		-exitval => 1,
+		-verbose => 1,
+	);
+
+# read subject and subject_alt from client certificate (if provided)
+push(@{$config{config_files}}, "test.conf")
+	if(!scalar(@{$config{config_files}}));
+load_configuration_files;
+
+# check options and command is ok
+eval {
+	die "Need action" if(scalar(@ARGV) < 1);
+	die "The PEST program path is a mandatory parameter."      if !$config{pest};
+	die "The EST server URL is a mandatory parameter."         if !$config{est}->{url};
+	die "The EST server CA is a mandatory parameter."          if !$config{est}->{ca};
+	die "CA RSA bits out of bounds."                           if $config{ca_bits}   < 1024 || $config{ca_bits} > 8192;
+	die "Certificate RSA bits out of bounds."                  if $config{cert_bits} < 1024 || $config{cert_bits} > 8192;
+
+	1;
+} or do {
+	my $m = $@;
+	chomp $m;
+	$m =~ s/ at .* line \d+\.$//;
+	$m =~ s/\.$//;
+	fat("$m. Use --help for more options.");
+};
+
+# process actions
+my $action = shift @ARGV;
+dbg "Action '%s'", $action;
+if   ($action eq "nop")     { msg("NOP!");            }
+elsif($action eq "config")  { print Dumper(\%config); }
+elsif($action eq "clean")   { do_clean 1;             }
+elsif($action eq "reset")   { do_clean 0;             }
+elsif($action eq "gendata") { do_gendata;             }
+elsif($action eq "list")    { do_list;                }
+elsif($action eq "run")     { do_run(@ARGV);          }
+else { fat("Unknown action '%s'.", $action); };
+
+1;
+__END__
+
+=head1 NAME
+
+test - Test EST
+
+=head1 SYNOPSIS
+
+=head2 Examples:
+
+=over 4
+
+  ./test [options] [actions ...]
+  ./pest -c test-suite.conf -t local-config.conf run 1.3
+  ./pest -c all_in_one.conf gendata
+  ./pest -c all_in_one.conf run all
+  ./pest -c all_in_one.conf run [test_id1, test_id2, ...]
+  ./pest -c all_in_one.conf -s run all
+  ./pest -c all_in_one.conf -vD run 2.1
+  ./pest -c all_in_one.conf list
+  ./pest -c all_in_one.conf reset
+  ./pest -c all_in_one.conf clean -f
+
+=back
+
+=head2 Options:
+
+=over 4
+
+  -c, --config=s      Load configuration file. This option can be used multiple
+                      times. Order will be respected.
+  -D, --debug         Print debug information.
+  -f, --force         Overwrite existing files. Force actions.
+  -h, --help          Brief help message.
+  -m, --man           Full documentation.
+  -s, --est-strict    Make use of the RFC7030 Change Subject Name attribute.
+  -v, --verbose       Verbose messages.
+  -V, --version       Print version information.
+
+=back
+
+=head2 Actions:
+
+=over 4
+
+  clean               Delete all data (Requires -f flag)
+  config              Dump parsed configuration (for debugging purposes)
+  gendata             Generate CA and certificates used by tests.
+  list                List tests and their current status (passed/failed)
+  nop                 NOP
+  reset               Delete all test ouput data (but keep generated certs)
+  run                 Run a list of test (or all test if 'all' is passed)
+
+=back
+
+=head1 DESCRIPTION
+
+B<TEST> is a Perl Test EST program designed for running a EST test suite
+against EST implementations. Test suites are created using own TEST test
+definition language.
+
+Test suites are defined in one or more configuration files. See
+L</"CONFIGURATION FILE FORMAT"> for more details.
+
+
+=head1 ACTIONS
+
+Each invocation to B<TEST> must be accompanied by an action:
+
+=over 4
+
+=over 4
+
+=item B<clean>
+
+This action will delete all data generated by a test suite, including
+certificates and CA/SubCA generated by action I<gendata>.
+
+This action will refuse working if flag I<--force> is not set.
+
+=item B<config>
+
+Dump consolidaed and parsed configuration from configuration files. Output is
+in L<Data::Dumper> format.
+
+This action is designed for desesperated debugging purposes.
+
+=item B<gendata>
+
+Build all certificates and CA/SubCA structure defined in section
+L</"TEST CERTIFICATES CONFIGURATION"> by the configuration files.
+
+This data will be written in path set by the global parameter I<certdir>.
+
+=item B<list>
+
+This command will list all tests defined by the configuration files, and their
+current status (passed/failed/pending/error).
+
+=item B<nop>
+
+Nothing to see here. Move along.
+
+=item B<reset>
+
+This action will delete all output generated by tests. Note that certificates
+and CA/SubCA generated by the action I<gendata> will remain untouched.
+
+=item B<run>
+
+This action run the list of tests (by id) passed as arguments.
+
+=back
+
+=back
+
+=head1 OPTIONS
+
+B<TEST> supports the following options:
+
+=over 4
+
+=over 4
+
+=item B<-c>, B<--config>=I<s>
+
+This option can be defined multiple times, and it is processed in the same
+order than it is set in the command line.
+
+It loads configuration files, one after another. Configuration files may
+overwrite or add new information to each section.
+
+=item B<-D>, B<--debug>
+
+Dump HTTP communications and other useful debug information. This flag also enables
+verbosity (see I<-v>).
+
+=item B<-f>, B<--force>
+
+Overwrite existing files. Force actions.
+
+=item B<-h>, B<--help>
+
+Print a brief help message and exits.
+
+=item B<-m>, B<--man>
+
+Prints the manual page and exits.
+
+=item B<-s>, B<--est-strict>
+
+This flag enables the EST-RFC7030 strict interpretation. This means that during
+enrollments, if certificate based authentication is used, Subject Name changes
+will be requested using the Change Subject Name attributes described in the
+RFC730.
+
+This flag can be also configured from a configuration file using the I<strict>
+parameter in the L</"EST CONFIGURATION SECTION"> section.
+
+=item B<-v>, B<--verbose>
+
+Verbose messages.
+
+=item B<-V>, B<--version>
+
+Print version information.
+
+=back
+
+=back
+
+=head1 CONFIGURATION FILE FORMAT
+
+Configuration files contain:
+
+=over 4
+
+- Configuration parameters.
+
+- The certificates, test CA and test Sub-CA schema for building the test
+certificates.
+
+- Hooks for executing external programs during tests.
+
+- Tests.
+
+=back
+
+Configuration files may contain comments. Comments are always ignored, and they
+must start with the hash character C<#> and they finish at the end of the line.
+
+Examples:
+
+  parameter = value  # this is a comment about this parameter
+  my_param =  # this seems assigning a comment to a parameter, but it
+              # is not true: my param will not have any value assigned
+
+A configuration file is divided into several sections. There are standard fixed
+sections and test sections, each one distinguished by its own I<id>. Examples
+of directives opening different sections:
+
+  [est]
+    ... here goes 'est' configuration parameters ...
+
+  [test my_test]
+    ... here goes my test definition ...
+
+  [hooks]
+    ... here is where hooks are installed ...
+
+Each configuration is described in detail in the following sections.
+
+=head2 IMPLICIT GLOBAL SECTION
+
+Any parameter set before any section is opened is set in the implicit global
+section.
+
+Global parameters are global configuration parameters for configuring the most
+basic parameters of the TEST and PEST applications.
+
+=over 4
+
+=over 4
+
+=item B<ca_bits>=I<number>
+
+This parameter is used for configuring the CA/SubCA private key key sizes.
+
+=item B<cert_bits>=I<number>
+
+This parameter is used for configuring certificates private key key sizes.
+
+=item B<certdir>=I<path to test certificates>
+
+Sets the target directory where test certificates will be written and kept.
+
+=item B<outdir>=I<path to test output>
+
+Path where test output will be written to.
+
+=item B<pest>=I<path to pest program>
+
+Path where pest can be found (usually I<../pest>).
+
+=item B<force>=I<1 enabled, 0 disabled>
+
+For configuring the command line I<--force> flag from a configuration file.
+
+=item B<verbose>=I<1 enabled, 0 disabled>
+
+Enables verbose mode. Same as command line I<--verbose> flag.
+
+=item B<debug>=I<1 enabled, 0 disabled>
+
+Enables debug mode. Same as command line I<--debug> flag.
+
+=back
+
+=back
+
+=head2 EST CONFIGURATION SECTION
+
+This section is opened using the following directive:
+
+  [est]
+
+Options and parameters related to EST server configuration.
+
+=over 4
+
+=over 4
+
+=item B<ca>=I<path>
+
+Path to the CA Chain PEM file used by the EST server for authenticating itself
+(over HTTPS communications) and issuing certificates.
+
+=item B<url>=I<url>
+
+Base EST HTTPS URL service (e.g. L<https://rfctest7030.com/.well-known/est>).
+
+=item B<strict>=I<1 enabled, 0 disabled>
+
+This flag enables the EST-RFC7030 strict interpretation. This means that during
+enrollments, if certificate based authentication is used, Subject Name changes
+will be requested using the Change Subject Name attributes described in the
+RFC730.
+
+This flag can be set also from command line using the I<--est-strict> flag.
+
+=item B<creds>=I<url>
+
+Default HTTP BASIC credentials used by TEST when accessing the EST server. This
+credentials may be overrided by test during enrollments. See
+L</"TESTS DEFINITION SECTIONS> description below.
+
+=item B<issuer_subject_name>=I<subject>
+
+Issuer subject name (e.g. C</CN=TestCA/O=MyEnrollmentCA/C=ES>) of the
+certificates delivered by the EST server during enrollments.
+
+=back
+
+=back
+
+=head2 TEST CERTIFICATES CONFIGURATION SECTION
+
+This section is opened using the following directive:
+
+  [est]
+
+Each non-void line of this section is interpreted as a certificate/CA/Sub-CA
+declaration.
+
+Each line is a sequence of columns, each column separated by one or more blank
+space characters, and values may be enclosed by double quote characters.
+Here follows an example of a simple I<certificates> section:
+
+  [certificates]
+  # Id      CA   Subject                                                   Issuer
+  # ------  ---  --------------------------------------------------------  ------
+    FakeCA  yes  "/CN=estExampleCA"                                        -
+    BadCert no   "/CN=test1"                                               FakeCA
+
+In this example a fake (self-signed root) certification authority, identified
+by the ID C<FakeCA> with subject name C</CN=estExampleCA> is created. This fake
+CA is used for issuing the certificate C<BadCert> with subject C</CN=test1>.
+
+=over 4
+
+- The I<Id> field is used for referring to these certifciates from tests.
+
+- The I<CA> flag tells if this certificate is for a CA/SubCA (yes) or a end
+certificate (no).
+
+- The I<Subject> field is used for configuring the I<Subject Name> X.509
+certificate attribute.
+
+- The I<Issuer> field is used for deciding who must sign this certificate. Use
+dash character (-) for issuing a self-signed certificate.
+
+=back
+
+=head2 Hooks section (C<[hooks]>)
+
+This section is opened using the following directive:
+
+  [hooks]
+
+This section is for installing hook programs that will be invoked during tests.
+
+Hooks can be useful for configuring the EST CA or EST service automatically
+during runtime. For instance, adding automatically authorizations in the
+validation authority used by the EST server.
+
+The following hooks are supported at this moment:
+
+=over 4
+
+=over 4
+
+=item B<test_start>=I<path>
+
+Path to the program that will be run each time a test is started.
+
+=item B<test_whitelist_add>=I<path>
+
+Path to a program that will be run for each element declared in a test
+whitelist.
+
+=back
+
+=back
+
+Go to section L</"HOOKS"> if you are looking for examples and details about
+hooks.
+
+=head2 TESTS DEFINITION SECTION
+
+A new test can be created opening a new section for it. Test section have the
+following format:
+
+  [test <test_id>]
+
+The I<test_id> string is the test identifier.
+
+Tests are composed by steps and enrollment actions. Steps and enrollment
+actions can be observed easily in the following code excerpt:
+
+   1. [test 3.1]
+   2. title     = Reenrolling a device
+   3. whitelist = \
+   4.         (cred=estuser:estpwd, /CN=test_3.1) \
+   5.         (cert=test_3.1-1-1,   /CN=test_3.1) \
+   6.         (cert=test_3.1-2-1,   /CN=test_3.1)
+   7.         
+   8.         # enroll first -- leave enroll in 'test_3.1-1-1'
+   9.         1/action  = simpleenroll
+  10.         1/in      = \
+  11.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1-1-1
+  12.         
+  13.         # try to reenroll two times, chaining correct certs
+  14.         #        both tries should work
+  15.         2/action  = simplereenroll
+  16.         2/in      = \
+  17.                 (cert=test_3.1-1-1, /CN=test_3.1) > test_3.1-2-1 \
+  18.                 (cert=test_3.1-2-1, /CN=test_3.1) ++
+
+Line by line:
+
+=over 4
+
+   1. [test 3.1]
+   2. title     = Reenrolling a device
+
+These two lines starts the test definition of test I<Reenrolling a device>,
+with id C<3.1>.
+
+   3. whitelist = \
+   4.         (cred=estuser:estpwd, /CN=test_3.1) \
+   5.         (cert=test_3.1-1-1,   /CN=test_3.1) \
+   6.         (cert=test_3.1-2-1,   /CN=test_3.1)
+
+The I<whitelist> parameters declares the upcoming authorized enrollments. In
+this example we are declaring that the following enrollments will be accepted:
+
+=over 4
+
+1. A password-based enrollment of a certificate with credentials
+C<estuser:estpwd> and requesting the subject name C</CN=test_3.1>.
+
+2. A certificate-based reenrollment of a certificate using the
+certificate referenced by the ID C<test_3.1-1-1>. This reenrollment will
+request the previous CN requested during enrollment.
+
+3. Another certificate-based reenrollment but using this time the
+C<test_3.1-2-1> certificate, and the same CN used before.
+
+=back
+
+   9.         1/action  = simpleenroll
+  10.         1/in      = \
+  11.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1-1-1
+
+These two parameters describe the step 1. In this first step a client will
+request a X.509 certificate with the subject name C</CN=test_3.1>, and
+authenticating itself using secret credentials.
+
+The returned certificate will be stored and referenced in next steps by the
+certificate id C<test_3.1-1-1>.
+
+  15.         2/action  = simplereenroll
+  16.         2/in      = \
+  17.                 (cert=test_3.1-1-1, /CN=test_3.1) > test_3.1-2-1 \
+  18.                 (cert=test_3.1-2-1, /CN=test_3.1) ++
+
+In this step, two reenrollments are performed sequentially. The first
+reenrollment uses the previous certificate C<test_3.1-1-1> and stores the new
+certificate in C<test_3.1-2-1>. The second reenrollment uses the certificate
+obtained in the previous reenrollment (C<test_3.1-2-1>). The C<++> particle
+makes explicit that this step must be succesful.
+
+=back
+
+In the described example above, B<all> steps and enrollments must be succesful
+to consider this test PASSED. Nevertheless, sometimes failing may be the
+correct option. Take a look into the following example:
+ 
+   1. [test 2.2]
+   2. title     = Enroll 1 ok, 4 bad
+   3. whitelist = (cred=estuser:estpwd,/CN=test_2.2)
+   4. 
+   5.         1/action  = simpleenroll
+   6.         1/in      = \
+   7.                 (cred=estuser:estpwd, /CN=test_2.2) ++ \
+   8.                 (cred=___user:estpwd, /CN=test_2.2) !! \
+   9.                 (cred=estuser:___pwd, /CN=test_2.2) !! \
+  10.                 (cred=___user:___pwd, /CN=test_2.2) !! \
+  11.                 (cred=estuser:estpwd, /CN=test_2.2) !! \
+  12.                 (                     /CN=test_2.2) !!
+
+Note than whitelist only declares one succeful enrollment. Once a
+whitelist-enrollment has been used, it cannot be used again. That it is the
+reason that only test in line 7 is marked as succesful with the particle C<++>,
+and the rest of enrollments are marked as failures C<!!>, including the
+enrollment in line 11 (exactly equal to enrollment set in line 7).
+
+If we would like to fix I<test 2.2> for accepting both enrollments in lines 7
+and 11, the following whitelist should be used:
+
+      whitelist = \
+              (cred=estuser:estpwd,/CN=test_2.2) \
+              (cred=estuser:estpwd,/CN=test_2.2)
+
+The test definitions section accept the following parameters:
+
+=over 4
+
+=over 4
+
+=item B<title>=I<title>
+
+Test title.
+
+=item B<whitelist>=I<authorized enrollments list>
+
+Authorized enrollments and reenrollments. Syntax for each authorization:
+
+=over 4
+
+(C<cred>=I<credentials>, C<cert>=I<certificate_id>, I<Subject_Name>)
+
+=back
+
+The I<cred> and I<cert> fields are optional. I<Subject_Name> is mandatory.
+
+=item I<step_id>/B<action>=I<EST action>
+
+EST action used by this step (e.g. C<simpleenroll> or C<cacerts>).
+
+=item I<step_id>/B<in>=I<EST action>
+
+Enrollments and reenrollments. Syntax for each enrollment:
+
+=over 4
+
+(C<cred>=I<credentials>, C<cert>=I<certificate_id>, I<Requested_Subject_Name>) [C<!!>|C<++>|> I<cert_id>]
+
+=back
+
+The I<cred> and I<cert> fields are optional. I<Requested_Subject_Name> field is
+mandatory.
+
+Test may declare explicitly if they will be sucessful (using particle C<++>) or
+if they will fail (using the particle C<!!>).
+
+Finally, one enrollment may save the returned certificate using the > operator.
+This operator requires enrollment to be succesful, and the returned certificate
+will be identified by the I<cert_id> identifier.
+
+=back
+
+=back
+
+=head1 HOOKS
+
+=head2 Test start
+
+A custom program can be triggered each time a new test is started. Example of
+I<test start> hook:
+
+  #!/bin/bash
+  
+  TEST_ID="$1"
+  
+  msg()
+  {
+    echo "HOOK(test_start): $@"
+  }
+  
+  msg "New test started"
+  msg "  Test ID [$TEST_ID]"
+  
+  exit 0
+
+=head2 Whitelist population
+
+A custom program can be triggered for each authorization declared in a test
+whitelist. Example:
+
+  #!/bin/bash
+  
+  TEST_ID="$1"               ; shift
+  CERTIFICATE_ID="$1"        ; shift
+  CERTIFICATE_SN="$1"        ; shift
+  CERTIFICATE_ISSUER_ID="$1" ; shift
+  CERTIFICATE_ISSUER_SN="$1" ; shift
+  CREDS="$1"                 ; shift
+  REQUESTED_SN="$1"          ; shift
+  
+  msg()
+  {
+    echo "HOOK(whitelist_add): $@"
+  }
+  
+  msg "Adding whitelist entry to test [$TEST_ID]"
+  msg "  - Requested subject [$REQUESTED_SN]"
+  
+  if [ "$CERTIFICATE_ID" ]; then
+    msg "  - Certificate based authentication"
+    msg "    - Certificate Issuer ID  [$CERTIFICATE_ISSUER_ID] ($CERTIFICATE_ISSUER_SN)"
+    msg "    - Certificate ID [$CERTIFICATE_ID] ($CERTIFICATE_SN)"
+  else
+    if [ "$CREDS" ]; then
+      msg "  - Password based authentication"
+    else
+      msg "  - Authentication mechanism not set - ERROR"
+      exit 1
+    fi
+  fi
+  
+  if [ "$CREDS" ]; then
+    msg "  - EST credentials: $CREDS"
+  fi
+
+  exit 0
+
+=head1 SEE ALSO
+
+=over 8
+
+=item L<pest>
+
+PEST manual page.
+
+=item L<test.conf>
+
+A complete test suite for testing an EST server supporting enrollments based on
+third-party CA issued certificates. This means that clients authenticate
+themselves using a certificate belonging to an external CA during enrollment.
+Once they are enrolled, re-enrollments are conducted using the EST CA.
+
+=item L<demo/demo.conf>
+
+A complete (and simpler) test suite for testing the public EST service found in
+L<http://testrfc7030.com/>.
+
+=item L<http://www.testrfc7030.com/>
+
+This server can be used to test the EST protocol as defined in RFC 7030.
+
+=back
+
+=cut
+
+

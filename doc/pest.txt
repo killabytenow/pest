@@ -1,0 +1,256 @@
+NAME
+    pest - Perl EST client
+
+SYNOPSIS
+  Examples:
+      ./pest [options] [actions ...]
+      ./pest -u est-server-url -C ca.pem -o output_dir -N cacerts
+      ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir simpleenroll
+      ./pest -u est-server-url -C ca.pem -c cert -k private_key -s subject \
+             -o outdir simpleenroll # Change subject, not RFC compliant
+      ./pest -u est-server-url -C ca.pem -c cert -k private_key -S subject \
+             -o outdir simpleenroll # Change subject, RFC compliant
+      ./pest -u est-server-url -C ca.pem -c cert -k private_key \
+             -o outdir simplereenroll
+      ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir serverkeygen
+
+  Options:
+      -b, --rsa-bits=n            Generate a RSA key of I<n> bits.
+      -u, --creds=s               Authentication credentials.
+      -D, --debug                 Enable debug information.
+      -C, --ca=s                  Path to CA PEM file with CA certificates.
+      -c, --client-pem=s          Client certificate.
+      -k, --client-key=s          Client certificate's private key.
+      -S, --change-subject=s      ChangeSubjectName.subject attribute value.
+      -A, --change-subject-alt=s  ChangeSubjectName.subjectAlt attribute value.
+      -o, --out=s                 Output directory.
+      -s, --subject=s             Set CSR subject name value.
+      -a, --subject-alt=s         Set CSR subject alt name value.
+      -u, --url=s                 EST server url.
+      -O, --overwrite             Overwrite all existing files.
+      -t, --timestamp             Prepend a timestamp on all written files.
+      -v, --verbose               Verbose messages.
+      -n, --no-verify-hostname    Do not check if the EST server hostname
+                                  matches with the EST X.509 common name.
+      -N, --no-verify-certs       Do not verify EST X.509 server certificate.
+      -h, --help                  Brief help message.
+      -m, --man                   Full documentation.
+      -V, --version               Print version information.
+
+  Actions:
+      cacerts                     Distribution of CA Certificates
+      simpleenroll                Operation for client enrollment,
+      simplereenroll              Operation for client re-enrollment.
+      serverkeygen                Enroll using a server-side generated key.
+      csrattrs                    Get CSR attributes.
+      fullcmc                     I<NOT IMPLEMENTED YET>. Full CMC proxy.
+      nop                         No operation. It does nothing, really nothing.
+
+DESCRIPTION
+    PEST is a Perl EST client designed for testing EST implementations. It
+    is easily modifiable and allows supporting not-standard and extremely
+    strict standard features.
+
+ACTIONS
+    cacerts This EST method allows an EST client, which it was not
+            configured with an Implicit TA database, to bootstrap the
+            installation of the Explicit TA database.
+
+            Therefore the EST client may use the "/cacerts" response to
+            establish an Explicit Trust Anchor database for subsequent TLS
+            authentication of the EST server.
+
+    simpleenroll
+            The "/simpleenroll" EST operation allows a client to request a
+            certificate from the EST server with an unique HTTPS POST
+            request.
+
+            The "/simpleenroll" operation allows usage of the
+            "ChangeSubjectName" RFC 7030 feature (see options
+            *--change-subject* and *--change-subject-alt*) for choosing a
+            new *Subject* when authentication is done via client
+            certificates. If the EST server does not support this feature,
+            the *--subject* and *--subject-alt* parameters may be used for
+            proposing a new subject or subject alternative name in the
+            "SubjectName" and "SubjectAltName" CSR attributes.
+
+    simplereenroll
+            The "/simplereenroll" is very similar to the "/simpleenroll"
+            method, but it is designed for only allowing certificate
+            renewals.
+
+            Note that options *--change-subject* and *--change-subject-alt*
+            are ignored by this program when using this method.
+            Nevertheless, this program features that the user can still
+            override in the CSR the expected subject name and subject alt
+            name (saw during the client certificate authentication) using
+            the parameters *--subject* and *--subject-alt*. In theory the
+            EST server should prohibit changing the subject name and the
+            subject alt name during a renewal.
+
+    serverkeygen
+            This method is equivalent to the "/simpleenroll" operation, but
+            the key information supplied in the CSR is substituted by a new
+            key generated on the server side. Both, the enrolled certificate
+            and the generated key are returned by the server.
+
+            Support for the "/serverkeygen" function is OPTIONAL for both
+            clients and servers.
+
+    fullcmc *This feature is not implemented yet*. An EST client can request
+            a certificate from an EST server with an HTTPS POST using the
+            operation path value of "/fullcmc".
+
+            Support for the "/fullcmc" function is OPTIONAL for both clients
+            and servers.
+
+    csrattrs
+            The EST client requests a list of CA-desired CSR attributes from
+            the CA by using this operation.
+
+            Support for the "/csrattrs" function is OPTIONAL for both
+            clients and servers.
+
+    nop     Nothing to see here. Move along.
+
+OPTIONS
+    -b, --rsa-bits=*n*
+            Generate a RSA key of n bits. By default 2048 bits are used.
+
+    -u, --creds=*user:pass*
+            HTTP Basic authentication credentials used during enrollment.
+            Credentials are packed using the traditional "username:password"
+            format.
+
+    -D, --debug
+            Dump HTTP communications and other useful debug information.
+            This flag also enables verbosity (see -v).
+
+    -C, --ca=*path*
+            Path to a PEM file with all CA certificates required for
+            authenticating TLS connections and validating certificates.
+
+    -n, --no-verify-hostname
+            Do not check that the EST server hostname.
+
+    -N, --no-verify-certs
+            Do not verify EST X.509 server certificates. Useful when
+            invoking the EST "cacerts" method for the first time.
+
+    -c, --client-pem=*path*
+            Path to PEM file with the public client certificate used for
+            authenticating to the EST server.
+
+    -k, --client-key=*path*
+            Path to PEM file with the client certificate private key used
+            for authenticating to the EST server.
+
+    -S, --change-subject=*new_subject*
+            This flag sets the "subject" value in the "ChangeSubjectName"
+            attribute extension as defined in *RFC 6402* (Client Name Change
+            Request attribute).
+
+    -A, --change-subject-alt=*new_subject_alt*
+            This flag sets the "subjectAlt" value in the "ChangeSubjectName"
+            attribute extension as defined in *RFC 6402* (Client Name Change
+            Request attribute).
+
+    -o, --out=*path*
+            Output directory. Keys, certificate signing requests,
+            certificates and raw responses will be written on this output
+            directory.
+
+            If no output directory is set, all data will be written to the
+            terminal.
+
+    -s, --subject=*subject*
+            By default the *subject* value found in the client certificate
+            will be used (see -c). Nevertheless, this option allows
+            overriding this value and force setting other desired subject in
+            the Certificate Signing Request.
+
+            Note that this field is mandatory if enrollment is performed
+            without TLS client certificate authentication.
+
+    -a, --subject-alt=*subject_alt*
+            By default the *subject_alt* value found in the client
+            certificate will be used (see -c). Nevertheless, this option
+            allows overriding this value and force setting other desired
+            subject alt name in the Certificate Signing Request.
+
+    -u, --url=*url*
+            URL pointing to EST server base path. Example:
+            <https://testrfc7030.com:8443/.well-known/est>
+
+    -O, --overwrite
+            Overwrite all existing files.
+
+    -t, --timestamp
+            Prepend a timestamp on all written files.
+
+    -v, --verbose
+            Verbose messages.
+
+    -h, --help
+            Print a brief help message and exits.
+
+    -m, --man
+            Prints the manual page and exits.
+
+    -V, --version
+            Print version information.
+
+CAVEATS
+  DSA, ECDSA and other algorithms
+    This program only can request RSA X.509 certificates due a limitation of
+    Crypt::OpenSSL::PKCS10. This module, used for creating and signing
+    PKCS10 documents (certificate signing requests), can only generate and
+    use RSA keys.
+
+  Method "/serverkeygen" does not parse the response
+    This method is not completed yet and it only downloads the PKCS7
+    response, without extracting the certificate and the private key.
+
+  Hardcoded RSA key for "/serverkeygen"
+    Note than the following 512 bit RSA key is used by the method
+    "/serverkeygen" as a bogus key during enrollments:
+
+      -----BEGIN RSA PRIVATE KEY-----
+      MIIBOgIBAAJBANi4IWNVyIAj6/D2XXjba4AmkBLt5AB3PjiDJc33Bw53yfXwqpVH
+      KyT2TRjlsR73C9oe0dmvNLP7cMa2MnzkspMCAwEAAQJAZbU8jicDOwggweyNf5vS
+      fskaUpfsqj9MJy99fYUSfbni38wr9npMvAhTnv+rIdVwpRtV4f/Kd2H6JKtY9/ue
+      cQIhAPgIc+5TOd1K/2d9CW2Fk1Ystx9/gbnKPj4oSwLHUBh5AiEA364wJ5Toh6ux
+      1T4US6TFYTU3dpRtSGF7mOxt0c2QOGsCIGUh/TM12Cg1BkLKJufzSQogHWLIeLqq
+      jgqGH1+4qR3xAiEAnqUavlgc/GzIOmhHWMdKvwFRjycCw31wfiviUBWuHnUCIG2d
+      afQkE1eKadRsILrI8jETA0xW4MrOvpjDkj3Ktbeq
+      -----END RSA PRIVATE KEY-----
+
+    This key is hardcoded for not wasting cpu cycles and for checking easily
+    if the key returned by the method "/serverkeygen" has been changed (or
+    not). Note that this key is small and weak, and a compromised RSA key.
+    For god's sake, it never should appear in the returned certificate.
+
+SEE ALSO
+    "RFC 6402 Certificate Management over CMS (CMC) Updates"
+            This document contains a set of updates to the base syntax for
+            CMC, a Certificate Management protocol using the Cryptographic
+            Message Syntax (CMS).
+
+            This document defines the ChangeSubjectName CSR extension used
+            by options *--change-subject* and *--change-subject-alt*.
+
+    "RFC 7030 Enrollment over Secure Transport"
+            This document profiles certificate enrollment for clients using
+            Certificate Management over CMS (CMC) messages over a secure
+            transport. This profile, called Enrollment over Secure Transport
+            (EST), describes a simple, yet functional, certificate
+            management protocol targeting Public Key Infrastructure (PKI)
+            clients that need to acquire client certificates and associated
+            Certification Authority (CA) certificates. It also supports
+            client-generated public/private key pairs as well as key pairs
+            generated by the CA.
+
+    <http://www.testrfc7030.com/>
+            This server can be used to test the EST protocol as defined in
+            RFC 7030.
+
