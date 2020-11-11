@@ -715,6 +715,61 @@ sub test_set_status
 # RUN TEST
 ###############################################################################
 
+sub normalize_subject
+{
+	my $subject = shift;
+	my %o = (
+		CN           =>   1,
+		DC           =>   1,
+		OU           =>   1,
+		O            =>   2,
+		L            =>   3,
+		ST           =>   4,
+		C            =>   5,
+		EmailAddress =>  10,
+		SURNAME      =>  20,
+		GIVENNAME    =>  20,
+		INITIALS     =>  20,
+		GENERATION   =>  20,
+		T            =>  20,
+		SN           => 100,
+	);
+	my @s;
+
+	# check subject name format
+	die "Cannot parse subject '$subject'."
+		if $subject !~ m{(
+					/[a-z0-9_]+
+					=
+					(?: " (?: [^/\\"] | \\[/,=+<>#;\\"] )* "
+					|     (?: [^/\\]  | \\[/,=+<>#;\\"] | \\[0-9a-fA-F]{2})* )
+				)+}xis;
+
+	# parse SN
+	push(@s, [ $1 => $2 || $3 || "" ])
+		while($subject =~ m{
+				/([a-z0-9_]+)
+				=
+				(?: " ( (?: [^/\\"] | \\[/,=+<>#;\\"] )* ) "
+				|     ( (?: [^/\\]  | \\[/,=+<>#;\\"] | \\[0-9a-fA-F]{2})* ) )
+			}gsix);
+
+	# normalize it
+	return join "",
+		map {
+			my $v = $_->[1];
+			$v =~ s{([\\"])}{\\$1}g;
+			sprintf("/%s=%s",
+				$_->[0],
+				$v =~ /\s/ || $v ne $_->[1] ? "\"$v\"" : $_->[1]);
+		} sort {
+			return  1 if !exists($o{$a->[0]}) &&  exists($o{$b->[0]});
+			return -1 if  exists($o{$a->[0]}) && !exists($o{$b->[0]});
+			return  0 if !exists($o{$a->[0]}) && !exists($o{$b->[0]});
+			return $o{$a->[0]} <=> $o{$b->[0]};
+		} @s;
+}
+
 sub do_run_test_enroll
 {
 	my ($test, $step, $in, $wl, @pars) = @_;
@@ -789,11 +844,20 @@ sub do_run_test_enroll
 		my $pem = test_get_file(
 				$test->{id}, $step->{id}, $in->{id},
 				"enroll-001.pem");
-		my $enrolled_sn = `openssl x509 -in "$pem" -subject -noout -nameopt compat`;
-		$enrolled_sn =~ s/[\r\n]+$//si;
-		$enrolled_sn =~ s/^subject=//i;
-		die "Requested SN '$in->{rsn}' does not match with got SN '$enrolled_sn'."
-			if($in->{rsn} ne $enrolled_sn);
+		my $esn = `openssl x509 -in "$pem" -subject -noout -nameopt compat`;
+		$esn =~ s/[\r\n]+$//si;
+		$esn =~ s/^subject=//i;
+
+		# compare requested subject and the subject obtained after enrollment
+		if($in->{rsn} ne $esn) {
+			err "Requested SN '$in->{rsn}' and obtained SN '$esn' are not exactly equal.";
+
+			# normalize them and try comparision again
+			my $n_rsn = normalize_subject($in->{rsn});
+			my $n_esn = normalize_subject($esn);
+			die "Once normalized, they still do not match (RSN '$n_rsn', ESN '$n_esn')."
+				if($n_rsn ne $n_esn);
+		}
 	}
 
 	if($in->{out} && $in->{out} !~ /^(!!|\+\+)$/) {
