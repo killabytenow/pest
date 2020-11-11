@@ -81,6 +81,7 @@ sub __msglog
 
 sub fat { __msglog("FAT", @_); exit(1); }
 sub err { __msglog("ERR", @_); }
+sub wrn { __msglog("WRN", @_); }
 sub dbg { __msglog("DBG", @_) if($config{verbose}); }
 sub msg { __msglog("MSG", @_); }
 sub out { my $tag = shift; __msglog("OUT[$tag]", @_); }
@@ -850,7 +851,7 @@ sub do_run_test_enroll
 
 		# compare requested subject and the subject obtained after enrollment
 		if($in->{rsn} ne $esn) {
-			err "Requested SN '$in->{rsn}' and obtained SN '$esn' are not exactly equal.";
+			wrn("Requested SN '$in->{rsn}' and obtained SN '$esn' are not exactly equal.");
 
 			# normalize them and try comparision again
 			my $n_rsn = normalize_subject($in->{rsn});
