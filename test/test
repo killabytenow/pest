@@ -276,6 +276,7 @@ sub load_configuration_file
 					$v .= $t ? " " . $t : "";
 					last if($t !~ /\\$/);
 				}
+				$v =~ s{([^\\])#.*$}{$1};	# remove comments
 			}
 			if($k eq "whitelist" && $sect_name ne "hooks") {
 				fat("%s:%d: whitelist parameter only exists in tests",
@@ -1104,6 +1105,126 @@ sub do_clean
 		dir_remove($config{certdir});
 	}
 }
+#
+###############################################################################
+# CONFIG DUMP
+###############################################################################
+
+sub do_config_dump__escape_val
+{
+	my $v = shift;
+	if($v =~ /[^a-z0-9_+-]/) {
+		$v =~ s{([\\"?*])}{\\$1}g;
+		$v = "\"$v\"";
+	}
+	return $v;
+}
+
+sub do_config_dump__print_section
+{
+	my ($sect_name, $sect, %l) = @_;
+
+	printf "[%s]\n", $sect_name
+		if($sect_name && $sect_name ne "global");
+
+	foreach my $k (sort keys %{$sect}) {
+		if(grep { ref($_)
+				? $k =~ $_
+				: $_ eq $k } @{$l{ok}}) {
+			if(defined($sect->{$k})) {
+				printf "%s = %s\n", $k, do_config_dump__escape_val($sect->{$k});
+			} else {
+				printf "#%s =\n", $k;
+			}
+			delete $sect->{$k};
+		}
+	}
+	print "\n";
+
+	my @pending =
+		grep {
+			my $k = $_;
+			!grep { $k eq $_ } @{$l{ko}}
+		} sort keys %{$sect};
+	fat("Unknown keys (%s) in section '%s'.", join(", ", @pending), $sect_name)
+		if scalar(@pending) > 0;
+}
+
+sub do_config_dump__print_tab_section
+{
+	my ($sect_name, $sect) = @_;
+
+	printf "[%s]\n", $sect_name
+		if($sect_name && $sect_name ne "global");
+
+	print join("\t", @{$_}) . "\n" foreach(@{$sect});
+	print "\n";
+}
+
+sub do_config_dump
+{
+	printf "# Configuration dump. This configuration is the union result\n";
+	printf "# of the following files:\n";
+	printf "#	- %s\n", $_ foreach(@{$config{config_files}});
+	printf "#\n\n";
+	delete $config{config_files};
+
+	do_config_dump__print_section
+		global => \%config,
+		ok => [ qw( ca_bits cert_bits certdir outdir pest force
+				verbose debug ) ],
+		ko => [ qw( config_files est certificates cert_by_id
+				test hooks ) ];
+
+	do_config_dump__print_section
+		est => $config{est},
+		ok => [ qw( ca url strict creds issuer_subject_name ) ],
+		ko => [];
+	delete $config{est};
+
+	do_config_dump__print_section
+		hooks => $config{hooks},
+		ok => [ qw( test_start test_whitelist_add ) ],
+		ko => [];
+	delete $config{hooks};
+
+	do_config_dump__print_tab_section
+		certificates => $config{certificates};
+	delete $config{certificates};
+	delete $config{cert_by_id};
+
+	foreach my $t (sort { $a->{id} cmp $b->{id} } values %{$config{test}}) {
+		printf "[test %s]\n", $t->{id};
+		printf "title = %s\n", $t->{title};
+		delete $t->{title};
+		print "whitelist =";
+		foreach my $we (@{$t->{whitelist}}) {
+			print " \\\n\t(";
+			printf "cred=%s, ", $we->{crd} if(defined($we->{crd}));
+			printf "cert=%s, ", $we->{pem} if(defined($we->{pem}));
+			printf "%s)", $we->{rsn};
+		}
+		delete $t->{whitelist};
+		print "\n\n";
+		foreach my $s (@{$t->{step}}) {
+			printf "\t%d/action=%s\n", $s->{id}, $s->{action};
+			printf "\t%d/in=", $s->{id};
+			foreach my $in (@{$s->{in}}) {
+				print " \\\n\t\t(";
+				printf "cred=%s, ", $in->{crd} if(defined($in->{crd}));
+				printf "cert=%s, ", $in->{pem} if(defined($in->{pem}));
+				printf "%s)", $in->{rsn};
+				printf "  %s%s",
+					$in->{out} !~ /^(\+\+|!!)$/ ? "> " : "",
+					$in->{out} if(defined($in->{out}));
+			}
+			print "\n\n";
+		}
+		delete $t->{step};
+		fat("Unknown keys (%s) in test '%s'.", join(", ", keys %{$t}), $t->{id})
+			if scalar(keys %{$t}) > 1;
+	}
+}
 
 ###############################################################################
 # MAIN PROGRAM
@@ -1160,7 +1281,7 @@ eval {
 my $action = shift @ARGV;
 dbg "Action '%s'", $action;
 if   ($action eq "nop")     { msg("NOP!");            }
-elsif($action eq "config")  { print Dumper(\%config); }
+elsif($action eq "config")  { do_config_dump; }
 elsif($action eq "clean")   { do_clean 1;             }
 elsif($action eq "reset")   { do_clean 0;             }
 elsif($action eq "gendata") { do_gendata;             }
