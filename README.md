@@ -16,7 +16,7 @@ TEST is accompanied by two test suite examples:
   conducted using the EST CA.
 
 - `/pest/test/demo/demo.conf` - A complete (and simpler) test suite for testing
-  the public EST service found in [http://testrfc7030.com/].
+  the public EST service found in http://testrfc7030.com/.
 
 Both files have detailed descriptions about its format, syntax, features and
 configuration parameters.
@@ -25,7 +25,7 @@ configuration parameters.
 Installation
 ------------
 
-Read Installation procedure and other useful information in INSTALL.md.
+Read Installation procedure and other useful information in `INSTALL.md`.
 
 
 Documentation
