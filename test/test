@@ -1421,7 +1421,7 @@ B<TEST> supports the following options:
 
 =over 4
 
-=item B<-c>, B<--config>=I<s>
+=item B<-b>, B<--est-base64>
 
 It instructs B<pest> to be more RFC respectful during enrollment, and do not
 send the CSR in PEM format (i.e. exclude C<---BEGIN CERTIFICATE REQUEST----->
