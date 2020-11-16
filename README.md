@@ -32,10 +32,12 @@ Documentation
 -------------
 
 PEST is fully documented using the Pod documentation format.
-Use `./pest -m` for reading the documentation.
+Use `./pest -m` for reading the documentation. You can read it online in
+https://htmlpreview.github.io/?https://github.com/killabytenow/pest/blob/main/doc/pest.html
 
 TEST is fully documented using the Pod documentation format.
-Use `./test/test -m` for reading the documentation.
+Use `./test/test -m` for reading the documentation. You can read it online in
+https://htmlpreview.github.io/?https://github.com/killabytenow/pest/blob/main/doc/test.html
 
 You can generate documentation in TXT, MAN and HTML format executing `make`.
 
