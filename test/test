@@ -1601,7 +1601,7 @@ RFC730.
 
 This flag can be set also from command line using the I<--est-strict> flag.
 
-=item B<creds>=I<url>
+=item B<creds>=I<credentials>
 
 Default HTTP BASIC credentials used by TEST when accessing the EST server. This
 credentials may be overrided by test during enrollments. See

@@ -230,7 +230,7 @@ CONFIGURATION FILE FORMAT
             This flag can be set also from command line using the
             *--est-strict* flag.
 
-        creds=*url*
+        creds=*credentials*
             Default HTTP BASIC credentials used by TEST when accessing the
             EST server. This credentials may be overrided by test during
             enrollments. See ""TESTS DEFINITION SECTIONS" description below.
@@ -242,7 +242,7 @@ CONFIGURATION FILE FORMAT
   TEST CERTIFICATES CONFIGURATION SECTION
     This section is opened using the following directive:
 
-      [est]
+      [certificates]
 
     Each non-void line of this section is interpreted as a
     certificate/CA/Sub-CA declaration.
@@ -275,7 +275,7 @@ CONFIGURATION FILE FORMAT
         certificate. Use dash character (-) for issuing a self-signed
         certificate.
 
-  Hooks section ("[hooks]")
+  TEST HOOKS SECTION
     This section is opened using the following directive:
 
       [hooks]

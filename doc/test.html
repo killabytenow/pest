@@ -28,7 +28,7 @@
       <li><a href="#IMPLICIT-GLOBAL-SECTION">IMPLICIT GLOBAL SECTION</a></li>
       <li><a href="#EST-CONFIGURATION-SECTION">EST CONFIGURATION SECTION</a></li>
       <li><a href="#TEST-CERTIFICATES-CONFIGURATION-SECTION">TEST CERTIFICATES CONFIGURATION SECTION</a></li>
-      <li><a href="#Hooks-section-hooks">Hooks section ([hooks])</a></li>
+      <li><a href="#TEST-HOOKS-SECTION">TEST HOOKS SECTION</a></li>
       <li><a href="#TESTS-DEFINITION-SECTION">TESTS DEFINITION SECTION</a></li>
     </ul>
   </li>
@@ -368,7 +368,7 @@
 <p>This flag can be set also from command line using the <i>--est-strict</i> flag.</p>
 
 </dd>
-<dt id="creds-url"><b>creds</b>=<i>url</i></dt>
+<dt id="creds-credentials"><b>creds</b>=<i>credentials</i></dt>
 <dd>
 
 <p>Default HTTP BASIC credentials used by TEST when accessing the EST server. This credentials may be overrided by test during enrollments. See <a href="#TESTS-DEFINITION-SECTIONS">&quot;&quot;TESTS DEFINITION SECTIONS&quot;</a> description below.</p>
@@ -388,7 +388,7 @@
 
 <p>This section is opened using the following directive:</p>
 
-<pre><code>  [est]</code></pre>
+<pre><code>  [certificates]</code></pre>
 
 <p>Each non-void line of this section is interpreted as a certificate/CA/Sub-CA declaration.</p>
 
@@ -414,7 +414,7 @@
 
 </ul>
 
-<h2 id="Hooks-section-hooks">Hooks section (<code>[hooks]</code>)</h2>
+<h2 id="TEST-HOOKS-SECTION">TEST HOOKS SECTION</h2>
 
 <p>This section is opened using the following directive:</p>
 

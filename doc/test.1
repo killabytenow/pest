@@ -380,8 +380,8 @@ will be requested using the Change Subject Name attributes described in the
 \&\s-1RFC730.\s0
 .Sp
 This flag can be set also from command line using the \fI\-\-est\-strict\fR flag.
-.IP "\fBcreds\fR=\fIurl\fR" 4
-.IX Item "creds=url"
+.IP "\fBcreds\fR=\fIcredentials\fR" 4
+.IX Item "creds=credentials"
 Default \s-1HTTP BASIC\s0 credentials used by \s-1TEST\s0 when accessing the \s-1EST\s0 server. This
 credentials may be overrided by test during enrollments. See
 "\*(L"\s-1TESTS DEFINITION SECTIONS\*(R"\s0 description below.
@@ -397,7 +397,7 @@ certificates delivered by the \s-1EST\s0 server during enrollments.
 This section is opened using the following directive:
 .PP
 .Vb 1
-\&  [est]
+\&  [certificates]
 .Ve
 .PP
 Each non-void line of this section is interpreted as a certificate/CA/Sub\-CA
@@ -431,9 +431,8 @@ certificate attribute.
 \&\- The \fIIssuer\fR field is used for deciding who must sign this certificate. Use
 dash character (\-) for issuing a self-signed certificate.
 .RE
-.ie n .SS "Hooks section (""[hooks]"")"
-.el .SS "Hooks section (\f(CW[hooks]\fP)"
-.IX Subsection "Hooks section ([hooks])"
+.SS "\s-1TEST HOOKS SECTION\s0"
+.IX Subsection "TEST HOOKS SECTION"
 This section is opened using the following directive:
 .PP
 .Vb 1
