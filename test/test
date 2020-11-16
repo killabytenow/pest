@@ -1620,7 +1620,7 @@ certificates delivered by the EST server during enrollments.
 
 This section is opened using the following directive:
 
-  [est]
+  [certificates]
 
 Each non-void line of this section is interpreted as a certificate/CA/Sub-CA
 declaration.
