@@ -354,6 +354,12 @@
 <p>Base EST HTTPS URL service (e.g. <a href="https://rfctest7030.com/.well-known/est">https://rfctest7030.com/.well-known/est</a>).</p>
 
 </dd>
+<dt id="plain_base64-1-plain-base64-0-send-PEM-file"><b>plain_base64</b>=<i>1 plain base64, 0 send PEM file</i></dt>
+<dd>
+
+<p>If this flag is enabled, it instructs the <b>pest</b> tool to be more RFC respectful during enrollment, and do not send the CSR in PEM format (i.e. exclude <code>---BEGIN CERTIFICATE REQUEST-----</code> headers and such). It only sends the CSR encoded in DER format, transferring it with base64 encoding.</p>
+
+</dd>
 <dt id="strict-1-enabled-0-disabled"><b>strict</b>=<i>1 enabled, 0 disabled</i></dt>
 <dd>
 

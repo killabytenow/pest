@@ -366,6 +366,12 @@ Path to the \s-1CA\s0 Chain \s-1PEM\s0 file used by the \s-1EST\s0 server for au
 .IP "\fBurl\fR=\fIurl\fR" 4
 .IX Item "url=url"
 Base \s-1EST HTTPS URL\s0 service (e.g. <https://rfctest7030.com/.well\-known/est>).
+.IP "\fBplain_base64\fR=\fI1 plain base64, 0 send \s-1PEM\s0 file\fR" 4
+.IX Item "plain_base64=1 plain base64, 0 send PEM file"
+If this flag is enabled, it instructs the \fBpest\fR tool to be more \s-1RFC\s0
+respectful during enrollment, and do not send the \s-1CSR\s0 in \s-1PEM\s0 format (i.e.
+exclude \f(CW\*(C`\-\-\-BEGIN CERTIFICATE REQUEST\-\-\-\-\-\*(C'\fR headers and such). It only sends
+the \s-1CSR\s0 encoded in \s-1DER\s0 format, transferring it with base64 encoding.
 .IP "\fBstrict\fR=\fI1 enabled, 0 disabled\fR" 4
 .IX Item "strict=1 enabled, 0 disabled"
 This flag enables the \s-1EST\-RFC7030\s0 strict interpretation. This means that during

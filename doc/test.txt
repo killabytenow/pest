@@ -213,6 +213,13 @@ CONFIGURATION FILE FORMAT
             Base EST HTTPS URL service (e.g.
             <https://rfctest7030.com/.well-known/est>).
 
+        plain_base64=*1 plain base64, 0 send PEM file*
+            If this flag is enabled, it instructs the pest tool to be more
+            RFC respectful during enrollment, and do not send the CSR in PEM
+            format (i.e. exclude "---BEGIN CERTIFICATE REQUEST-----" headers
+            and such). It only sends the CSR encoded in DER format,
+            transferring it with base64 encoding.
+
         strict=*1 enabled, 0 disabled*
             This flag enables the EST-RFC7030 strict interpretation. This
             means that during enrollments, if certificate based
