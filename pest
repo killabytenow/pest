@@ -103,14 +103,14 @@ q{
 	Attribute ::= SEQUENCE {
 		type    AttributeType,
 		values  SET OF AttributeValue -- at least one value is required --
-        }
+	}
 
 	AttributeValue ::= DirectoryString  --ANY
 
 	AttributeTypeAndValue ::= SEQUENCE {
 		type    OBJECT IDENTIFIER,
 		value   AttributeValue
-        }
+	}
 };
 
 use constant SERVERKEYGEN_DEFAULT_RSA =>
@@ -138,6 +138,7 @@ my %config = (
 	est_path                => undef,
 	est_port                => undef,
 	est_proto               => undef,
+	est_plain_base64        => undef,
 	est_url                 => "https://testrfc7030.com:8443/.well-known/est",
 	http_basic_password     => undef,
 	http_basic_username     => undef,
@@ -310,7 +311,7 @@ sub output_get_filename
 			? sprintf("%s/%s%s",
 				$config{output_directory},
 				$config{timestamp_prefix}
-			       		? POSIX::strftime("%Y%m%d_%H%M%S_", localtime)
+					? POSIX::strftime("%Y%m%d_%H%M%S_", localtime)
 					: "",
 				$filename)
 			: undef;
@@ -416,6 +417,13 @@ sub create_pkcs10
 	# get CSR PEM
 	$pem = $req->get_pem_req();
 
+	# strip PEM headers if B64 format is requested
+	if($config{est_plain_base64}) {
+		$pem = join("\n",
+			grep { $_ !~ /^(---+(BEGIN|END) CERTIFICATE REQUEST---+|\s*)$/; }
+			split(/\r?\n/, $pem));
+	}
+
 	# retrun
 	output_write_file_pkcs10("request.csr", $pem);
 	dbg("Certificate Signing Request dump:\n%s",
@@ -428,7 +436,15 @@ sub create_pkcs10
 sub do_est_call
 {
 	my ($method, $action, $anonymous, $content_type, $content) = @_;
-	my ($res, $req);
+	my (@extra_headers, $res, $req);
+
+	if(ref($content_type) eq "ARRAY") {
+		@extra_headers = @{$content_type};
+		$content_type = shift @extra_headers;
+	}
+
+	# XXX Should add host?
+	#'Host'           => "$config{est_host}:$config{est_port}",
 
 	eval {
 		my ($ua, $ssl_opts);
@@ -473,7 +489,7 @@ sub do_est_call
 					[
 						'Content-Type'   => $content_type,
 						'Content-Length' => length($content),
-						#'Host'           => "$config{est_host}:$config{est_port}",
+						@extra_headers
 					],
 					$content);
 
@@ -508,7 +524,7 @@ sub do_est_call
 			if($config{debug});
 	}
 
-        return $res;
+	return $res;
 }
 
 sub call_program
@@ -564,9 +580,9 @@ sub extract_pkcs7_certs
 	$ct = $r->header("Content-Type") || "";
 	if($ct !~ m{^application/pkcs7-mime(?:;\s+smime-type=certs-only)?$}) {
 		err("Expected PKCS#7/certs-only response, but received\n"
-			  . "    Status       [%s]\n"
-			  . "    Content-type [%s]\n",
-			  $r->status_line, $ct);
+			. "    Status       [%s]\n"
+			. "    Content-type [%s]\n",
+			$r->status_line, $ct);
 	}
 
 	# DIGICERT BUG FIX
@@ -650,7 +666,9 @@ sub do_enroll
 	# call to /simple(re)?enroll using credentials/certs set current config
 	my $r = do_est_post(
 		$method, 0,	# /simple(re)?enroll, NOT anonymous
-		"application/pkcs10",
+		$config{est_plain_base64}
+			? [ "application/pkcs10", "Content-Transfer-Encoding" => "base64" ]
+			: "application/pkcs10",
 		create_pkcs10(
 			build_key_rsa($config{rsa_bits}),
 			$subject,
@@ -699,7 +717,9 @@ sub do_serverkeygen
 	# call to /serverkeygen with a bogus RSA key
 	$r = do_est_post(
 		"serverkeygen", 0,	# /serverkeygen, NOT anonymous
-		"application/pkcs10",
+		$config{est_plain_base64}
+			? [ "application/pkcs10", "Content-Transfer-Encoding" => "base64" ]
+			: "application/pkcs10",
 		create_pkcs10(
 			load_hardcoded_rsa, # bogus key, it will be overwritten
 			$config{subject},                   # by the EST server
@@ -768,6 +788,7 @@ sub do_csrattrs
 # get command line options
 GetOptions(
 	"b|rsa-bits=i"           => \$config{rsa_bits},
+	"B|plain-base64"         => \$config{est_plain_base64},
 	"u|creds=s"              => \$config{creds},
 	"D|debug"                =>
 		sub {
@@ -873,6 +894,7 @@ foreach my $p (qw(
 			client_key client_pem creds
 			est_url
 			est_proto est_host est_port est_path
+			est_plain_base64
 			http_basic_username http_basic_password
 			rsa_bits
 			subject subject_alt
@@ -912,19 +934,20 @@ pest - Perl EST client
 =head2 Examples:
 
   ./pest [options] [actions ...]
-  ./pest -u est-server-url -C ca.pem -o output_dir -N cacerts
-  ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir simpleenroll
-  ./pest -u est-server-url -C ca.pem -c cert -k private_key -s subject \
+  ./pest -l est-server-url -C ca.pem -o output_dir -N cacerts
+  ./pest -l est-server-url -C ca.pem -u creds -s subject -o outdir simpleenroll
+  ./pest -l est-server-url -C ca.pem -c cert -k private_key -s subject \
          -o outdir simpleenroll # Change subject, not RFC compliant
-  ./pest -u est-server-url -C ca.pem -c cert -k private_key -S subject \
+  ./pest -l est-server-url -C ca.pem -c cert -k private_key -S subject \
          -o outdir simpleenroll # Change subject, RFC compliant
-  ./pest -u est-server-url -C ca.pem -c cert -k private_key \
+  ./pest -l est-server-url -C ca.pem -c cert -k private_key \
          -o outdir simplereenroll
-  ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir serverkeygen
+  ./pest -l est-server-url -C ca.pem -u creds -s subject -o outdir serverkeygen
 
 =head2 Options:
 
   -b, --rsa-bits=n            Generate a RSA key of I<n> bits.
+  -B, --plain-base64          Do not send full PEM, only Base64 encoded DER
   -u, --creds=s               Authentication credentials.
   -D, --debug                 Enable debug information.
   -C, --ca=s                  Path to CA PEM file with CA certificates.
@@ -935,7 +958,7 @@ pest - Perl EST client
   -o, --out=s                 Output directory.
   -s, --subject=s             Set CSR subject name value.
   -a, --subject-alt=s         Set CSR subject alt name value.
-  -u, --url=s                 EST server url.
+  -l, --url=s                 EST server url.
   -O, --overwrite             Overwrite all existing files.
   -t, --timestamp             Prepend a timestamp on all written files.
   -v, --verbose               Verbose messages.
@@ -1039,6 +1062,13 @@ Nothing to see here. Move along.
 
 Generate a RSA key of B<n> bits. By default 2048 bits are used.
 
+=item B<-B>, B<--plain-base64>
+
+It instructs B<pest> to be more RFC respectful during enrollment, and do not
+send the CSR in PEM format (i.e. exclude C<---BEGIN CERTIFICATE REQUEST----->
+headers and such). It only sends the CSR encoded in DER format, transferring it
+with base64 encoding.
+
 =item B<-u>, B<--creds>=I<user:pass>
 
 HTTP Basic authentication credentials used during enrollment. Credentials are
@@ -1105,7 +1135,7 @@ By default the I<subject_alt> value found in the client certificate will be
 used (see B<-c>). Nevertheless, this option allows overriding this value and
 force setting other desired subject alt name in the Certificate Signing Request.
 
-=item B<-u>, B<--url>=I<url>
+=item B<-l>, B<--url>=I<url>
 
 URL pointing to EST server base path.
 Example: L<https://testrfc7030.com:8443/.well-known/est>

@@ -45,6 +45,7 @@ my %config = (
 	est          => {
 		ca                  => undef,
 		url                 => undef,
+		plain_base64        => undef,
 		strict              => undef,
 		creds               => undef,
 		issuer_subject_name => undef,
@@ -816,6 +817,10 @@ sub do_run_test_enroll
 		push(@pars, -s => $in->{rsn});
 	}
 
+	# enable plain base64 if requested
+	push(@pars, "--plain-base64")
+		if($config{est}->{plain_base64});
+
 	# decide (according to whitelist) if this enrollment must be succesful (or not)
 	my $expected_result = 0;
 	for(my $i = 0; $i < scalar(@{$wl}); $i++) {
@@ -1232,6 +1237,7 @@ sub do_config_dump
 
 # get command line options
 GetOptions(
+	"b|est-base64"  => \$config{est}->{plain_base64},
 	"c|config=s"    => sub { my ($p, $v) = @_; push(@{$config{config_files}}, $v); },
 	"D|debug"       => sub { $config{debug} = $config{verbose} = 1; },
 	"f|force"       => \$config{force},
@@ -1307,7 +1313,7 @@ test - Test EST
   ./pest -c all_in_one.conf gendata
   ./pest -c all_in_one.conf run all
   ./pest -c all_in_one.conf run [test_id1, test_id2, ...]
-  ./pest -c all_in_one.conf -s run all
+  ./pest -c all_in_one.conf -s -b run all
   ./pest -c all_in_one.conf -vD run 2.1
   ./pest -c all_in_one.conf list
   ./pest -c all_in_one.conf reset
@@ -1319,6 +1325,7 @@ test - Test EST
 
 =over 4
 
+  -b, --est-base64    Do not send full PEM, only Base64 encoded DER.
   -c, --config=s      Load configuration file. This option can be used multiple
                       times. Order will be respected.
   -D, --debug         Print debug information.
@@ -1413,6 +1420,13 @@ B<TEST> supports the following options:
 =over 4
 
 =over 4
+
+=item B<-c>, B<--config>=I<s>
+
+It instructs B<pest> to be more RFC respectful during enrollment, and do not
+send the CSR in PEM format (i.e. exclude C<---BEGIN CERTIFICATE REQUEST----->
+headers and such). It only sends the CSR encoded in DER format, transferring it
+with base64 encoding.
 
 =item B<-c>, B<--config>=I<s>
 
