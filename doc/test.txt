@@ -8,13 +8,14 @@ SYNOPSIS
           ./pest -c all_in_one.conf gendata
           ./pest -c all_in_one.conf run all
           ./pest -c all_in_one.conf run [test_id1, test_id2, ...]
-          ./pest -c all_in_one.conf -s run all
+          ./pest -c all_in_one.conf -s -b run all
           ./pest -c all_in_one.conf -vD run 2.1
           ./pest -c all_in_one.conf list
           ./pest -c all_in_one.conf reset
           ./pest -c all_in_one.conf clean -f
 
   Options:
+          -b, --est-base64    Do not send full PEM, only Base64 encoded DER.
           -c, --config=s      Load configuration file. This option can be used multiple
                               times. Order will be respected.
           -D, --debug         Print debug information.
@@ -80,6 +81,12 @@ ACTIONS
 
 OPTIONS
     TEST supports the following options:
+
+        -b, --est-base64
+            It instructs pest to be more RFC respectful during enrollment,
+            and do not send the CSR in PEM format (i.e. exclude "---BEGIN
+            CERTIFICATE REQUEST-----" headers and such). It only sends the
+            CSR encoded in DER format, transferring it with base64 encoding.
 
         -c, --config=*s*
             This option can be defined multiple times, and it is processed

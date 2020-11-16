@@ -2,7 +2,7 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
-<title>pest - Perl EST client</title>
+<title></title>
 <meta http-equiv="content-type" content="text/html; charset=utf-8" />
 <link rev="made" href="mailto:root@localhost" />
 </head>
@@ -42,19 +42,20 @@
 <h2 id="Examples">Examples:</h2>
 
 <pre><code>  ./pest [options] [actions ...]
-  ./pest -u est-server-url -C ca.pem -o output_dir -N cacerts
-  ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir simpleenroll
-  ./pest -u est-server-url -C ca.pem -c cert -k private_key -s subject \
+  ./pest -l est-server-url -C ca.pem -o output_dir -N cacerts
+  ./pest -l est-server-url -C ca.pem -u creds -s subject -o outdir simpleenroll
+  ./pest -l est-server-url -C ca.pem -c cert -k private_key -s subject \
          -o outdir simpleenroll # Change subject, not RFC compliant
-  ./pest -u est-server-url -C ca.pem -c cert -k private_key -S subject \
+  ./pest -l est-server-url -C ca.pem -c cert -k private_key -S subject \
          -o outdir simpleenroll # Change subject, RFC compliant
-  ./pest -u est-server-url -C ca.pem -c cert -k private_key \
+  ./pest -l est-server-url -C ca.pem -c cert -k private_key \
          -o outdir simplereenroll
-  ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir serverkeygen</code></pre>
+  ./pest -l est-server-url -C ca.pem -u creds -s subject -o outdir serverkeygen</code></pre>
 
 <h2 id="Options">Options:</h2>
 
 <pre><code>  -b, --rsa-bits=n            Generate a RSA key of I&lt;n&gt; bits.
+  -B, --plain-base64          Do not send full PEM, only Base64 encoded DER
   -u, --creds=s               Authentication credentials.
   -D, --debug                 Enable debug information.
   -C, --ca=s                  Path to CA PEM file with CA certificates.
@@ -65,7 +66,7 @@
   -o, --out=s                 Output directory.
   -s, --subject=s             Set CSR subject name value.
   -a, --subject-alt=s         Set CSR subject alt name value.
-  -u, --url=s                 EST server url.
+  -l, --url=s                 EST server url.
   -O, --overwrite             Overwrite all existing files.
   -t, --timestamp             Prepend a timestamp on all written files.
   -v, --verbose               Verbose messages.
@@ -160,6 +161,12 @@
 <p>Generate a RSA key of <b>n</b> bits. By default 2048 bits are used.</p>
 
 </dd>
+<dt id="B---plain-base64"><b>-B</b>, <b>--plain-base64</b></dt>
+<dd>
+
+<p>It instructs <b>pest</b> to be more RFC respectful during enrollment, and do not send the CSR in PEM format (i.e. exclude <code>---BEGIN CERTIFICATE REQUEST-----</code> headers and such). It only sends the CSR encoded in DER format, transferring it with base64 encoding.</p>
+
+</dd>
 <dt id="u---creds-user:pass"><b>-u</b>, <b>--creds</b>=<i>user:pass</i></dt>
 <dd>
 
@@ -236,7 +243,7 @@
 <p>By default the <i>subject_alt</i> value found in the client certificate will be used (see <b>-c</b>). Nevertheless, this option allows overriding this value and force setting other desired subject alt name in the Certificate Signing Request.</p>
 
 </dd>
-<dt id="u---url-url"><b>-u</b>, <b>--url</b>=<i>url</i></dt>
+<dt id="l---url-url"><b>-l</b>, <b>--url</b>=<i>url</i></dt>
 <dd>
 
 <p>URL pointing to EST server base path. Example: <a href="https://testrfc7030.com:8443/.well-known/est">https://testrfc7030.com:8443/.well-known/est</a></p>

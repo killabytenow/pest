@@ -2,7 +2,7 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
-<title>test - Test EST</title>
+<title></title>
 <meta http-equiv="content-type" content="text/html; charset=utf-8" />
 <link rev="made" href="mailto:root@localhost" />
 </head>
@@ -56,7 +56,7 @@
   ./pest -c all_in_one.conf gendata
   ./pest -c all_in_one.conf run all
   ./pest -c all_in_one.conf run [test_id1, test_id2, ...]
-  ./pest -c all_in_one.conf -s run all
+  ./pest -c all_in_one.conf -s -b run all
   ./pest -c all_in_one.conf -vD run 2.1
   ./pest -c all_in_one.conf list
   ./pest -c all_in_one.conf reset
@@ -68,7 +68,8 @@
 
 <ul>
 
-<pre><code>  -c, --config=s      Load configuration file. This option can be used multiple
+<pre><code>  -b, --est-base64    Do not send full PEM, only Base64 encoded DER.
+  -c, --config=s      Load configuration file. This option can be used multiple
                       times. Order will be respected.
   -D, --debug         Print debug information.
   -f, --force         Overwrite existing files. Force actions.
@@ -168,6 +169,12 @@
 
 <dl>
 
+<dt id="b---est-base64"><b>-b</b>, <b>--est-base64</b></dt>
+<dd>
+
+<p>It instructs <b>pest</b> to be more RFC respectful during enrollment, and do not send the CSR in PEM format (i.e. exclude <code>---BEGIN CERTIFICATE REQUEST-----</code> headers and such). It only sends the CSR encoded in DER format, transferring it with base64 encoding.</p>
+
+</dd>
 <dt id="c---config-s"><b>-c</b>, <b>--config</b>=<i>s</i></dt>
 <dd>
 

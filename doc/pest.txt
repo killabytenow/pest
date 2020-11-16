@@ -4,18 +4,19 @@ NAME
 SYNOPSIS
   Examples:
       ./pest [options] [actions ...]
-      ./pest -u est-server-url -C ca.pem -o output_dir -N cacerts
-      ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir simpleenroll
-      ./pest -u est-server-url -C ca.pem -c cert -k private_key -s subject \
+      ./pest -l est-server-url -C ca.pem -o output_dir -N cacerts
+      ./pest -l est-server-url -C ca.pem -u creds -s subject -o outdir simpleenroll
+      ./pest -l est-server-url -C ca.pem -c cert -k private_key -s subject \
              -o outdir simpleenroll # Change subject, not RFC compliant
-      ./pest -u est-server-url -C ca.pem -c cert -k private_key -S subject \
+      ./pest -l est-server-url -C ca.pem -c cert -k private_key -S subject \
              -o outdir simpleenroll # Change subject, RFC compliant
-      ./pest -u est-server-url -C ca.pem -c cert -k private_key \
+      ./pest -l est-server-url -C ca.pem -c cert -k private_key \
              -o outdir simplereenroll
-      ./pest -u est-server-url -C ca.pem -u creds -s subject -o outdir serverkeygen
+      ./pest -l est-server-url -C ca.pem -u creds -s subject -o outdir serverkeygen
 
   Options:
       -b, --rsa-bits=n            Generate a RSA key of I<n> bits.
+      -B, --plain-base64          Do not send full PEM, only Base64 encoded DER
       -u, --creds=s               Authentication credentials.
       -D, --debug                 Enable debug information.
       -C, --ca=s                  Path to CA PEM file with CA certificates.
@@ -26,7 +27,7 @@ SYNOPSIS
       -o, --out=s                 Output directory.
       -s, --subject=s             Set CSR subject name value.
       -a, --subject-alt=s         Set CSR subject alt name value.
-      -u, --url=s                 EST server url.
+      -l, --url=s                 EST server url.
       -O, --overwrite             Overwrite all existing files.
       -t, --timestamp             Prepend a timestamp on all written files.
       -v, --verbose               Verbose messages.
@@ -117,6 +118,12 @@ OPTIONS
     -b, --rsa-bits=*n*
             Generate a RSA key of n bits. By default 2048 bits are used.
 
+    -B, --plain-base64
+            It instructs pest to be more RFC respectful during enrollment,
+            and do not send the CSR in PEM format (i.e. exclude "---BEGIN
+            CERTIFICATE REQUEST-----" headers and such). It only sends the
+            CSR encoded in DER format, transferring it with base64 encoding.
+
     -u, --creds=*user:pass*
             HTTP Basic authentication credentials used during enrollment.
             Credentials are packed using the traditional "username:password"
@@ -178,7 +185,7 @@ OPTIONS
             allows overriding this value and force setting other desired
             subject alt name in the Certificate Signing Request.
 
-    -u, --url=*url*
+    -l, --url=*url*
             URL pointing to EST server base path. Example:
             <https://testrfc7030.com:8443/.well-known/est>
 
