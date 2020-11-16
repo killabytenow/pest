@@ -1585,6 +1585,13 @@ Path to the CA Chain PEM file used by the EST server for authenticating itself
 
 Base EST HTTPS URL service (e.g. L<https://rfctest7030.com/.well-known/est>).
 
+=item B<plain_base64>=I<1 plain base64, 0 send PEM file>
+
+If this flag is enabled, it instructs the B<pest> tool to be more RFC
+respectful during enrollment, and do not send the CSR in PEM format (i.e.
+exclude C<---BEGIN CERTIFICATE REQUEST-----> headers and such). It only sends
+the CSR encoded in DER format, transferring it with base64 encoding.
+
 =item B<strict>=I<1 enabled, 0 disabled>
 
 This flag enables the EST-RFC7030 strict interpretation. This means that during
