@@ -1654,7 +1654,7 @@ dash character (-) for issuing a self-signed certificate.
 
 =back
 
-=head2 Hooks section (C<[hooks]>)
+=head2 TEST HOOKS SECTION
 
 This section is opened using the following directive:
 
