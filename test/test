@@ -23,10 +23,11 @@ use warnings;
 use utf8;
 
 use Data::Dumper;
+use File::Path;
 use Getopt::Long qw(:config gnu_getopt);
 use Hash::Util 'lock_keys';
+use POSIX;
 use Pod::Usage;
-use File::Path;
 
 our $TEST_VERSION = "0.0.1";
 our %TEST_STATUS_TO_TEXT = (
@@ -69,15 +70,28 @@ lock_keys %{$config{hooks}};
 # COMMON FUNCS
 ###############################################################################
 
+my %__log_channels;
+
 sub __msglog
 {
 	my $prefix = shift;
 	my $format = shift;
-	$prefix .= ":" if($prefix);
+	$prefix = $prefix ? "$0:$prefix:" : "$0:";
+	my $ts = POSIX::strftime("[%Y-%m-%d %H:%M:%S] ", localtime);
+	my @msg = split(/\n/,
+			join("", scalar(@_) > 0
+					? sprintf($format, @_)
+					: $format || " "));
 
-	print STDERR
-		map { "$0:$prefix $_\n" }
-		split(/\n/, join("", scalar(@_) > 0 ? sprintf($format, @_) : $format || " "));
+	foreach my $lc (values %__log_channels) {
+		my $fh = $lc->[1];
+		print $fh
+			(join("\n",
+				map { sprintf("%s%s %s",
+					$lc->[2] ? $ts : "", $prefix, $_) }
+					@msg)
+			. "\n");
+	}
 }
 
 sub fat { __msglog("FAT", @_); exit(1); }
@@ -86,6 +100,44 @@ sub wrn { __msglog("WRN", @_); }
 sub dbg { __msglog("DBG", @_) if($config{verbose}); }
 sub msg { __msglog("MSG", @_); }
 sub out { my $tag = shift; __msglog("OUT[$tag]", @_); }
+
+sub log_channel_open
+{
+	my ($id, $path, $fh) = @_;
+
+	fat("Log '%s' already opened.", $id)
+		if exists($__log_channels{$id});
+	fat("Cannot open log '%s' on path '%s': %s", $id, $path, $!)
+		if(defined($path) && !open($fh, ">>", $path));
+
+	$__log_channels{$id} = [ $path, $fh, defined($path) ];
+}
+log_channel_open(STDERR => undef, *STDERR);
+
+sub log_channel_close
+{
+	my ($id) = @_;
+
+	fat("Log '%s' is not opened.", $id)
+		if !exists($__log_channels{$id});
+	fat("Cannot close log '%s'", $id)
+		if(!defined($__log_channels{$id}->[0]));
+
+	close($__log_channels{$id}->[1]);
+	delete $__log_channels{$id};
+}
+
+sub log_channel_get_path
+{
+	my ($id) = @_;
+
+	fat("Log '%s' is not opened.", $id)
+		if !exists($__log_channels{$id});
+	fat("Log '%s' has not a path associated.", $id)
+		if !defined $__log_channels{$id}->[0];
+
+	return $__log_channels{$id}->[0];
+}
 
 sub indent
 {
@@ -787,6 +839,7 @@ sub do_run_test_enroll
 	# add basic parameters for enrollment
 	push(@pars,
 		-o => $od,
+		-L => log_channel_get_path("test_log"),
 		-b => $config{cert_bits});
 
 	# push enrollment (or global) credentials parameter (if required)
@@ -903,7 +956,9 @@ sub do_run_test_command
 	# get test/step/in output dir
 	$od = test_get_out_dir($test->{id}, $step->{id});
 	dir_create($od);
-	push(@pars, -o => $od);
+	push(@pars,
+		-L => log_channel_get_path("test_log"),
+		-o => $od);
 
 	# push EST credentials (if defined)
 	push(@pars, -u => $config{est}->{creds})
@@ -923,9 +978,17 @@ sub do_run_test
 
 	if($status->{status} eq "ok" && !$config{force}) {
 		msg("Test already passed. Use force flag for running it again.");
-		return;
+		return 1;
 	}
 
+	# remove/create test output dir
+	dir_remove(test_get_out_dir($test->{id}));
+	dir_create(test_get_out_dir($test->{id}));
+
+	# open test log
+	log_channel_open(test_log => test_get_file($test->{id}, undef, undef, "log"));
+
+	# inform that test is about to start
 	out("test/$test->{id}", "Running test '%s' %s.",
 		$test->{title},
 		{
@@ -936,10 +999,6 @@ sub do_run_test
 			ok      => "again",
 			pending => "for the first time",
 		}->{$status->{status}});
-
-	# remove/create test output dir
-	dir_remove(test_get_out_dir($test->{id}));
-	dir_create(test_get_out_dir($test->{id}));
 
 	# load future certs in 'cert_by_id'
 	# (clean previous test output certs)
@@ -1038,6 +1097,8 @@ sub do_run_test
 		defined($error)
 			? (failed => $test->{id}, $error)
 			: (ok     => $test->{id}));
+
+	log_channel_close("test_log");
 
 	return !$error;
 }

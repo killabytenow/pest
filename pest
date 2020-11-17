@@ -154,22 +154,62 @@ my %config = (
 );
 lock_keys %config;
 
+my %__log_channels;
+
 sub __msglog
 {
 	my $prefix = shift;
 	my $format = shift;
-	$prefix .= ":" if($prefix);
+	$prefix = $prefix ? "$0:$prefix:" : "$0:";
+	my $ts = POSIX::strftime("[%Y-%m-%d %H:%M:%S] ", localtime);
+	my @msg = split(/\n/,
+			join("", scalar(@_) > 0
+					? sprintf($format, @_)
+					: $format || " "));
 
-	print STDERR
-		map { "$0:$prefix $_\n" }
-		split(/\n/, join("", scalar(@_) > 0 ? sprintf($format, @_) : $format));
+	foreach my $lc (values %__log_channels) {
+		my $fh = $lc->[1];
+		print $fh
+			(join("\n",
+				map { sprintf("%s%s %s",
+					$lc->[2] ? $ts : "", $prefix, $_) }
+					@msg)
+			. "\n");
+	}
 }
 
 sub fat { __msglog("FAT", @_); exit(1); }
 sub err { __msglog("ERR", @_); }
+sub wrn { __msglog("WRN", @_); }
 sub dbg { __msglog("DBG", @_) if($config{verbose}); }
 sub msg { __msglog("MSG", @_); }
 sub out { my $tag = shift; __msglog("OUT[$tag]", @_); }
+
+sub log_channel_open
+{
+	my ($id, $path, $fh) = @_;
+
+	fat("Log '%s' already opened.", $id)
+		if exists($__log_channels{$id});
+	fat("Cannot open log '%s' on path '%s': %s", $id, $path, $!)
+		if(defined($path) && !open($fh, ">>", $path));
+
+	$__log_channels{$id} = [ $path, $fh, defined($path) ];
+}
+log_channel_open(STDERR => undef, *STDERR);
+
+sub log_channel_close
+{
+	my ($id) = @_;
+
+	fat("Log '%s' is not opened.", $id)
+		if !exists($__log_channels{$id});
+	fat("Cannot close log '%s'", $id)
+		if(!defined($__log_channels{$id}->[0]));
+
+	close($__log_channels{$id}->[1]);
+	delete $__log_channels{$id};
+}
 
 sub indent
 {
@@ -734,7 +774,7 @@ sub do_serverkeygen
 	# extract certs (TODO better, real processing)
 	output_write_file(
 			"serverkeygen.response",
-                        "application/binary",
+			"application/binary",
 			$r->content);
 }
 
@@ -787,34 +827,39 @@ sub do_csrattrs
 
 # get command line options
 GetOptions(
+	"a|subject-alt=s"        => \$config{subject_alt},
+	"A|change-subject-alt=s" => \$config{change_subject_alt},
 	"b|rsa-bits=i"           => \$config{rsa_bits},
 	"B|plain-base64"         => \$config{est_plain_base64},
-	"u|creds=s"              => \$config{creds},
+	"c|client-pem=s"         => \$config{client_pem},
+	"C|ca=s"                 => \$config{ca_file},
 	"D|debug"                =>
 		sub {
 			$config{debug} = $config{verbose} = 1;
 			$IO::Socket::SSL::DEBUG = 4;
 		},
-	"C|ca=s"                 => \$config{ca_file},
+	"h|help"                 => sub { pod2usage(-exitval => 0, -verbose => 1); },
 	"k|client-key=s"         => \$config{client_key},
-	"c|client-pem=s"         => \$config{client_pem},
-	"A|change-subject-alt=s" => \$config{change_subject_alt},
-	"S|change-subject=s"     => \$config{change_subject},
-	"o|out=s"                => \$config{output_directory},
-	"a|subject-alt=s"        => \$config{subject_alt},
-	"s|subject=s"            => \$config{subject},
 	"l|url=s"                => \$config{est_url},
-	"O|overwrite"            => \$config{overwrite},
-	"t|timestamp"            => \$config{timestamp_prefix},
-	"v|verbose"              => \$config{verbose},
+	"L|log-file=s"           =>
+		sub {
+			my ($p, $v) = @_;
+			log_channel_open(log => $v);
+		},
+	"m|man"                  => sub { pod2usage(-exitval => 0, -verbose => 2); },
 	"n|no-verify-hostname"   => \$config{no_verify_hostname},
 	"N|no-verify-certs"      =>
 		sub {
 			$config{no_verify_hostname} = 1;
 			$config{no_verify_certs} = 1;
 		},
-	"h|help"                 => sub { pod2usage(-exitval => 0, -verbose => 1); },
-	"m|man"                  => sub { pod2usage(-exitval => 0, -verbose => 2); },
+	"o|out=s"                => \$config{output_directory},
+	"O|overwrite"            => \$config{overwrite},
+	"s|subject=s"            => \$config{subject},
+	"S|change-subject=s"     => \$config{change_subject},
+	"t|timestamp"            => \$config{timestamp_prefix},
+	"u|creds=s"              => \$config{creds},
+	"v|verbose"              => \$config{verbose},
 	"V|version"
 		=> sub {
 			print "pest $PEST_VERSION (C) Copyright 2020 Gerardo Garcia Pena\n";
@@ -822,7 +867,6 @@ GetOptions(
 			print "Read the COPYING file for details.\n";
 			exit 0;
 		},
-
 ) or pod2usage(
 		-message => "Error in command line arguments.",
 		-exitval => 1,
@@ -946,25 +990,26 @@ pest - Perl EST client
 
 =head2 Options:
 
-  -b, --rsa-bits=n            Generate a RSA key of I<n> bits.
+  -A, --change-subject-alt=s  ChangeSubjectName.subjectAlt attribute value.
   -B, --plain-base64          Do not send full PEM, only Base64 encoded DER
-  -u, --creds=s               Authentication credentials.
-  -D, --debug                 Enable debug information.
   -C, --ca=s                  Path to CA PEM file with CA certificates.
+  -D, --debug                 Enable debug information.
+  -O, --overwrite             Overwrite all existing files.
+  -S, --change-subject=s      ChangeSubjectName.subject attribute value.
+  -a, --subject-alt=s         Set CSR subject alt name value.
+  -b, --rsa-bits=n            Generate a RSA key of I<n> bits.
   -c, --client-pem=s          Client certificate.
   -k, --client-key=s          Client certificate's private key.
-  -S, --change-subject=s      ChangeSubjectName.subject attribute value.
-  -A, --change-subject-alt=s  ChangeSubjectName.subjectAlt attribute value.
-  -o, --out=s                 Output directory.
-  -s, --subject=s             Set CSR subject name value.
-  -a, --subject-alt=s         Set CSR subject alt name value.
   -l, --url=s                 EST server url.
-  -O, --overwrite             Overwrite all existing files.
-  -t, --timestamp             Prepend a timestamp on all written files.
-  -v, --verbose               Verbose messages.
+  -L, --log-file=s            Write log output to a log file.
   -n, --no-verify-hostname    Do not check if the EST server hostname
                               matches with the EST X.509 common name.
   -N, --no-verify-certs       Do not verify EST X.509 server certificate.
+  -o, --out=s                 Output directory.
+  -s, --subject=s             Set CSR subject name value.
+  -t, --timestamp             Prepend a timestamp on all written files.
+  -u, --creds=s               Authentication credentials.
+  -v, --verbose               Verbose messages.
   -h, --help                  Brief help message.
   -m, --man                   Full documentation.
   -V, --version               Print version information.
@@ -1102,6 +1147,11 @@ the EST server.
 
 Path to PEM file with the client certificate private key used for
 authenticating to the EST server.
+
+=item B<-L>, B<--log-file>=I<path>
+
+Concatenate log output to a certain log file. If the log file does not exist,
+B<pest> will create it.
 
 =item B<-S>, B<--change-subject>=I<new_subject>
 
