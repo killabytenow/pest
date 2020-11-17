@@ -54,25 +54,26 @@
 
 <h2 id="Options">Options:</h2>
 
-<pre><code>  -b, --rsa-bits=n            Generate a RSA key of I&lt;n&gt; bits.
+<pre><code>  -A, --change-subject-alt=s  ChangeSubjectName.subjectAlt attribute value.
   -B, --plain-base64          Do not send full PEM, only Base64 encoded DER
-  -u, --creds=s               Authentication credentials.
-  -D, --debug                 Enable debug information.
   -C, --ca=s                  Path to CA PEM file with CA certificates.
+  -D, --debug                 Enable debug information.
+  -O, --overwrite             Overwrite all existing files.
+  -S, --change-subject=s      ChangeSubjectName.subject attribute value.
+  -a, --subject-alt=s         Set CSR subject alt name value.
+  -b, --rsa-bits=n            Generate a RSA key of I&lt;n&gt; bits.
   -c, --client-pem=s          Client certificate.
   -k, --client-key=s          Client certificate&#39;s private key.
-  -S, --change-subject=s      ChangeSubjectName.subject attribute value.
-  -A, --change-subject-alt=s  ChangeSubjectName.subjectAlt attribute value.
-  -o, --out=s                 Output directory.
-  -s, --subject=s             Set CSR subject name value.
-  -a, --subject-alt=s         Set CSR subject alt name value.
   -l, --url=s                 EST server url.
-  -O, --overwrite             Overwrite all existing files.
-  -t, --timestamp             Prepend a timestamp on all written files.
-  -v, --verbose               Verbose messages.
+  -L, --log-file=s            Write log output to a log file.
   -n, --no-verify-hostname    Do not check if the EST server hostname
                               matches with the EST X.509 common name.
   -N, --no-verify-certs       Do not verify EST X.509 server certificate.
+  -o, --out=s                 Output directory.
+  -s, --subject=s             Set CSR subject name value.
+  -t, --timestamp             Prepend a timestamp on all written files.
+  -u, --creds=s               Authentication credentials.
+  -v, --verbose               Verbose messages.
   -h, --help                  Brief help message.
   -m, --man                   Full documentation.
   -V, --version               Print version information.</code></pre>
@@ -207,6 +208,12 @@
 <dd>
 
 <p>Path to PEM file with the client certificate private key used for authenticating to the EST server.</p>
+
+</dd>
+<dt id="L---log-file-path"><b>-L</b>, <b>--log-file</b>=<i>path</i></dt>
+<dd>
+
+<p>Concatenate log output to a certain log file. If the log file does not exist, <b>pest</b> will create it.</p>
 
 </dd>
 <dt id="S---change-subject-new_subject"><b>-S</b>, <b>--change-subject</b>=<i>new_subject</i></dt>
