@@ -942,7 +942,7 @@ sub do_run_test_enroll
 	}
 
 	msg("Command: %s", join(" ", $config{pest}, @pars, $step->{action}));
-	my $result = !system($config{pest}, @pars, @pars, $step->{action});
+	my $result = !system($config{pest}, @pars, $step->{action});
 
 	if($result) {
 		my $pem = test_get_file(
