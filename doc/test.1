@@ -129,7 +129,7 @@
 .\" ========================================================================
 .\"
 .IX Title "TEST 1"
-.TH TEST 1 "2020-11-17" "perl v5.26.1" "User Contributed Perl Documentation"
+.TH TEST 1 "2020-11-18" "perl v5.26.1" "User Contributed Perl Documentation"
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -477,22 +477,27 @@ actions can be observed easily in the following code excerpt:
 .Vb 10
 \&   1. [test 3.1]
 \&   2. title     = Reenrolling a device
-\&   3. whitelist = \e
-\&   4.         (cred=estuser:estpwd, /CN=test_3.1) \e
-\&   5.         (cert=test_3.1\-1\-1,   /CN=test_3.1) \e
-\&   6.         (cert=test_3.1\-2\-1,   /CN=test_3.1)
-\&   7.         
-\&   8.         # enroll first \-\- leave enroll in \*(Aqtest_3.1\-1\-1\*(Aq
-\&   9.         1/action  = simpleenroll
-\&  10.         1/in      = \e
-\&  11.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1\-1\-1
-\&  12.         
-\&  13.         # try to reenroll two times, chaining correct certs
-\&  14.         #        both tries should work
-\&  15.         2/action  = simplereenroll
-\&  16.         2/in      = \e
-\&  17.                 (cert=test_3.1\-1\-1, /CN=test_3.1) > test_3.1\-2\-1 \e
-\&  18.                 (cert=test_3.1\-2\-1, /CN=test_3.1) ++
+\&   3. est       = https://another.est.server.com:444/.well\-known/est
+\&   4. whitelist = \e
+\&   5.         (cred=estuser:estpwd, /CN=test_3.1) \e
+\&   6.         (cert=test_3.1\-1\-1,   /CN=test_3.1) \e
+\&   7.         (cert=test_3.1\-2\-1,   /CN=test_3.1)
+\&   8.         
+\&   9.         # enroll first \-\- leave enroll in \*(Aqtest_3.1\-1\-1\*(Aq
+\&  10.         1/action  = simpleenroll
+\&  11.         1/est     = https://another.est.server.com:442/.well\-known/est
+\&  12.         1/in      = \e
+\&  13.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1\-1\-1
+\&  14.         
+\&  15.         # try to reenroll two times, chaining correct certs
+\&  16.         #        both tries should work
+\&  17.         2/action  = simplereenroll
+\&  18.         2/in      = \e
+\&  19.                 (cert=test_3.1\-1\-1, /CN=test_3.1) > test_3.1\-2\-1 \e
+\&  20.                 (cert=test_3.1\-2\-1, /CN=test_3.1) ++ \e
+\&  21.                 (cert=test_3.1\-2\-1, \e
+\&  22.                  est=https://broken.est.server.com/,
+\&  23.                  /CN=test_3.1) !!
 .Ve
 .PP
 Line by line:
@@ -506,11 +511,18 @@ Line by line:
 These two lines starts the test definition of test \fIReenrolling a device\fR,
 with id \f(CW3.1\fR.
 .Sp
+.Vb 1
+\&   3. est       = http://another.est.server.com:444/.well\-known/est
+.Ve
+.Sp
+This line overrides the global \s-1EST\s0 server configured in the \f(CW\*(C`[est]\*(C'\fR section
+with a new default \s-1EST\s0 server for this test.
+.Sp
 .Vb 4
-\&   3. whitelist = \e
-\&   4.         (cred=estuser:estpwd, /CN=test_3.1) \e
-\&   5.         (cert=test_3.1\-1\-1,   /CN=test_3.1) \e
-\&   6.         (cert=test_3.1\-2\-1,   /CN=test_3.1)
+\&   4. whitelist = \e
+\&   5.         (cred=estuser:estpwd, /CN=test_3.1) \e
+\&   6.         (cert=test_3.1\-1\-1,   /CN=test_3.1) \e
+\&   7.         (cert=test_3.1\-2\-1,   /CN=test_3.1)
 .Ve
 .Sp
 The \fIwhitelist\fR parameters declares the upcoming authorized enrollments. In
@@ -530,31 +542,49 @@ request the previous \s-1CN\s0 requested during enrollment.
 .RE
 .RS 4
 .Sp
-.Vb 3
-\&   9.         1/action  = simpleenroll
-\&  10.         1/in      = \e
-\&  11.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1\-1\-1
+.Vb 4
+\&  10.         1/action  = simpleenroll
+\&  11.         1/est     = https://another.est.server.com:442/.well\-known/est
+\&  12.         1/in      = \e
+\&  13.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1\-1\-1
 .Ve
 .Sp
 These two parameters describe the step 1. In this first step a client will
 request a X.509 certificate with the subject name \f(CW\*(C`/CN=test_3.1\*(C'\fR, and
-authenticating itself using secret credentials.
+authenticating itself using credentials \f(CW\*(C`estuser:estpwd\*(C'\fR. Also, for this
+enrollment, the default \s-1EST\s0 server previously set in the global \f(CW\*(C`[est]\*(C'\fR
+section and in line 2, is overrided again.
 .Sp
 The returned certificate will be stored and referenced in next steps by the
 certificate id \f(CW\*(C`test_3.1\-1\-1\*(C'\fR.
 .Sp
-.Vb 4
-\&  15.         2/action  = simplereenroll
-\&  16.         2/in      = \e
-\&  17.                 (cert=test_3.1\-1\-1, /CN=test_3.1) > test_3.1\-2\-1 \e
-\&  18.                 (cert=test_3.1\-2\-1, /CN=test_3.1) ++
+.Vb 7
+\&  17.         2/action  = simplereenroll
+\&  18.         2/in      = \e
+\&  19.                 (cert=test_3.1\-1\-1, /CN=test_3.1) > test_3.1\-2\-1 \e
+\&  20.                 (cert=test_3.1\-2\-1, /CN=test_3.1) ++ \e
+\&  21.                 (cert=test_3.1\-2\-1, \e
+\&  22.                  est=https://broken.est.server.com/,
+\&  23.                  /CN=test_3.1) !!
 .Ve
 .Sp
-In this step, two reenrollments are performed sequentially. The first
-reenrollment uses the previous certificate \f(CW\*(C`test_3.1\-1\-1\*(C'\fR and stores the new
-certificate in \f(CW\*(C`test_3.1\-2\-1\*(C'\fR. The second reenrollment uses the certificate
-obtained in the previous reenrollment (\f(CW\*(C`test_3.1\-2\-1\*(C'\fR). The \f(CW\*(C`++\*(C'\fR particle
-makes explicit that this step must be succesful.
+In this step, three reenrollments are performed sequentially:
+.Sp
+.RS 4
+1. The first reenrollment uses the previous certificate \f(CW\*(C`test_3.1\-1\-1\*(C'\fR and
+stores the new certificate in \f(CW\*(C`test_3.1\-2\-1\*(C'\fR.
+.Sp
+2. The second reenrollment uses the certificate obtained in the previous
+reenrollment (\f(CW\*(C`test_3.1\-2\-1\*(C'\fR). The \f(CW\*(C`++\*(C'\fR particle makes explicit that this
+step must be succesful.
+.Sp
+3. The third reenrollment is expectd to fail because it tries to enroll using
+the non-working \f(CW\*(C`broken.est.server.com\*(C'\fR. This enrollment uses the parameter
+\&\f(CW\*(C`est\*(C'\fR for overriding (again) any other \s-1EST\s0 server configured before for only
+this enrollment.
+.RE
+.RE
+.RS 4
 .RE
 .PP
 In the described example above, \fBall\fR steps and enrollments must be succesful

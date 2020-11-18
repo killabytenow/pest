@@ -460,22 +460,27 @@
 
 <pre><code>   1. [test 3.1]
    2. title     = Reenrolling a device
-   3. whitelist = \
-   4.         (cred=estuser:estpwd, /CN=test_3.1) \
-   5.         (cert=test_3.1-1-1,   /CN=test_3.1) \
-   6.         (cert=test_3.1-2-1,   /CN=test_3.1)
-   7.         
-   8.         # enroll first -- leave enroll in &#39;test_3.1-1-1&#39;
-   9.         1/action  = simpleenroll
-  10.         1/in      = \
-  11.                 (cred=estuser:estpwd,/CN=test_3.1) &gt; test_3.1-1-1
-  12.         
-  13.         # try to reenroll two times, chaining correct certs
-  14.         #        both tries should work
-  15.         2/action  = simplereenroll
-  16.         2/in      = \
-  17.                 (cert=test_3.1-1-1, /CN=test_3.1) &gt; test_3.1-2-1 \
-  18.                 (cert=test_3.1-2-1, /CN=test_3.1) ++</code></pre>
+   3. est       = https://another.est.server.com:444/.well-known/est
+   4. whitelist = \
+   5.         (cred=estuser:estpwd, /CN=test_3.1) \
+   6.         (cert=test_3.1-1-1,   /CN=test_3.1) \
+   7.         (cert=test_3.1-2-1,   /CN=test_3.1)
+   8.         
+   9.         # enroll first -- leave enroll in &#39;test_3.1-1-1&#39;
+  10.         1/action  = simpleenroll
+  11.         1/est     = https://another.est.server.com:442/.well-known/est
+  12.         1/in      = \
+  13.                 (cred=estuser:estpwd,/CN=test_3.1) &gt; test_3.1-1-1
+  14.         
+  15.         # try to reenroll two times, chaining correct certs
+  16.         #        both tries should work
+  17.         2/action  = simplereenroll
+  18.         2/in      = \
+  19.                 (cert=test_3.1-1-1, /CN=test_3.1) &gt; test_3.1-2-1 \
+  20.                 (cert=test_3.1-2-1, /CN=test_3.1) ++ \
+  21.                 (cert=test_3.1-2-1, \
+  22.                  est=https://broken.est.server.com/,
+  23.                  /CN=test_3.1) !!</code></pre>
 
 <p>Line by line:</p>
 
@@ -486,10 +491,14 @@
 
 <p>These two lines starts the test definition of test <i>Reenrolling a device</i>, with id <code>3.1</code>.</p>
 
-<pre><code>   3. whitelist = \
-   4.         (cred=estuser:estpwd, /CN=test_3.1) \
-   5.         (cert=test_3.1-1-1,   /CN=test_3.1) \
-   6.         (cert=test_3.1-2-1,   /CN=test_3.1)</code></pre>
+<pre><code>   3. est       = http://another.est.server.com:444/.well-known/est</code></pre>
+
+<p>This line overrides the global EST server configured in the <code>[est]</code> section with a new default EST server for this test.</p>
+
+<pre><code>   4. whitelist = \
+   5.         (cred=estuser:estpwd, /CN=test_3.1) \
+   6.         (cert=test_3.1-1-1,   /CN=test_3.1) \
+   7.         (cert=test_3.1-2-1,   /CN=test_3.1)</code></pre>
 
 <p>The <i>whitelist</i> parameters declares the upcoming authorized enrollments. In this example we are declaring that the following enrollments will be accepted:</p>
 
@@ -503,20 +512,34 @@
 
 </ul>
 
-<pre><code>   9.         1/action  = simpleenroll
-  10.         1/in      = \
-  11.                 (cred=estuser:estpwd,/CN=test_3.1) &gt; test_3.1-1-1</code></pre>
+<pre><code>  10.         1/action  = simpleenroll
+  11.         1/est     = https://another.est.server.com:442/.well-known/est
+  12.         1/in      = \
+  13.                 (cred=estuser:estpwd,/CN=test_3.1) &gt; test_3.1-1-1</code></pre>
 
-<p>These two parameters describe the step 1. In this first step a client will request a X.509 certificate with the subject name <code>/CN=test_3.1</code>, and authenticating itself using secret credentials.</p>
+<p>These two parameters describe the step 1. In this first step a client will request a X.509 certificate with the subject name <code>/CN=test_3.1</code>, and authenticating itself using credentials <code>estuser:estpwd</code>. Also, for this enrollment, the default EST server previously set in the global <code>[est]</code> section and in line 2, is overrided again.</p>
 
 <p>The returned certificate will be stored and referenced in next steps by the certificate id <code>test_3.1-1-1</code>.</p>
 
-<pre><code>  15.         2/action  = simplereenroll
-  16.         2/in      = \
-  17.                 (cert=test_3.1-1-1, /CN=test_3.1) &gt; test_3.1-2-1 \
-  18.                 (cert=test_3.1-2-1, /CN=test_3.1) ++</code></pre>
+<pre><code>  17.         2/action  = simplereenroll
+  18.         2/in      = \
+  19.                 (cert=test_3.1-1-1, /CN=test_3.1) &gt; test_3.1-2-1 \
+  20.                 (cert=test_3.1-2-1, /CN=test_3.1) ++ \
+  21.                 (cert=test_3.1-2-1, \
+  22.                  est=https://broken.est.server.com/,
+  23.                  /CN=test_3.1) !!</code></pre>
 
-<p>In this step, two reenrollments are performed sequentially. The first reenrollment uses the previous certificate <code>test_3.1-1-1</code> and stores the new certificate in <code>test_3.1-2-1</code>. The second reenrollment uses the certificate obtained in the previous reenrollment (<code>test_3.1-2-1</code>). The <code>++</code> particle makes explicit that this step must be succesful.</p>
+<p>In this step, three reenrollments are performed sequentially:</p>
+
+<ul>
+
+<p>1. The first reenrollment uses the previous certificate <code>test_3.1-1-1</code> and stores the new certificate in <code>test_3.1-2-1</code>.</p>
+
+<p>2. The second reenrollment uses the certificate obtained in the previous reenrollment (<code>test_3.1-2-1</code>). The <code>++</code> particle makes explicit that this step must be succesful.</p>
+
+<p>3. The third reenrollment is expectd to fail because it tries to enroll using the non-working <code>broken.est.server.com</code>. This enrollment uses the parameter <code>est</code> for overriding (again) any other EST server configured before for only this enrollment.</p>
+
+</ul>
 
 </ul>
 

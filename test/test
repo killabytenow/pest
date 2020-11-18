@@ -192,6 +192,28 @@ sub dir_remove
 		if @$err;
 }
 
+sub est_url_parse
+{
+	my ($url, $cred) = @_;
+
+	fat("Cannot parse EST URL '%s'.", $url)
+		if $url !~ m{^
+				(?:	(?<proto> https     ) :// )?
+				(?:	(?<creds> [^@]+     ) @   )?
+					(?<url>   [^:/?\#]+ )
+				(?: :	(?<port>  \d+       )     )?
+					(?<path>  [^?\#]*   )?
+			$}xi;
+	$cred = $+{creds} if $+{creds};
+	$url  = sprintf("%s://%s:%d%s",
+			$+{proto} || "https",
+			$+{url},
+			$+{port} || 443,
+			$+{path} || "");
+
+	return ($url, $cred);
+}
+
 ###############################################################################
 # CONFIG LOADER
 ###############################################################################
@@ -204,8 +226,9 @@ sub load_configuration_file__parse_list
 			$config_file, $fh->input_line_number, $field, $v)
 		if $v !~ m{^\s*(
 				\(
-					(?: \s* cert \s* = \s* [a-z0-9_.-]+        \s* , )?
-					(?: \s* cred \s* = \s* (?:\\\s+|[^,\\\s])+ \s* , )?
+					(?: \s* cert \s* = \s* [a-z0-9_.-]+       \s* ,
+					|   \s* cred \s* = \s* (?:\\\s|[^,\\\s])+ \s* ,
+					|   \s* est  \s* = \s* (?:\\, |[^,\\\s])+ \s* , )*
 					\s* (?:\\\s+|[^\)\\\s])+
 				\)
 				(?: \s* (?: > \s* [a-z0-9_.-]+ | \!\! | \+\+ ))?
@@ -218,8 +241,9 @@ sub load_configuration_file__parse_list
 			fat("%s:%d: Cannot parse attribute '%s': '%s'.",
 				$config_file, $fh->input_line_number, $field, $e)
 				if $e !~ m{^\(
-						(?: \s* cert \s* = \s* (?<pem> [a-z0-9_.-]+)        \s* , )?
-						(?: \s* cred \s* = \s* (?<crd> (?:\\\s+|[^,\\\s])+) \s* , )?
+						(?: \s* cert \s* = \s* (?<pem> [a-z0-9_.-]+      ) \s* ,
+						|   \s* cred \s* = \s* (?<crd> (?:\\\s|[^,\\\s])+) \s* ,
+						|   \s* est  \s* = \s* (?<est> (?:\\, |[^,\\\s])+) \s* , )*
 						\s* (?<rsn> (?:\\\s+|[^\)\\\s])+)
 					\)
 					(?: \s* (?:
@@ -233,11 +257,13 @@ sub load_configuration_file__parse_list
 				pem => $+{pem},
 				crd => $+{crd},
 				rsn => $+{rsn},
+				est => $+{est},
 				$out_allowed ? (out => $+{out}) : (),
 			}
 		} $v =~ /\(
-				(?: \s* cert \s* = \s* [a-z0-9_.-]+        \s* , )?
-				(?: \s* cred \s* = \s* (?:\\\s+|[^,\\\s])+ \s* , )?
+				(?: \s* cert \s* = \s* [a-z0-9_.-]+        \s* ,
+				|   \s* cred \s* = \s* (?:\\\s|[^,\\\s])+  \s* ,
+				|   \s* est  \s* = \s* (?:\\, |[^,\\\s])+  \s* , )*
 				\s* (?:\\\s+|[^\)\\\s])+
 			\)
 			(?: \s* (?: > \s* [a-z0-9_.-]+ | \!\! | \+\+ ) )?
@@ -286,7 +312,20 @@ sub load_configuration_file
 			$sect_name = lc($+{sect});
 			$sect = \%config;
 			foreach my $s (split(/\s+/, $sect_name)) {
-				$sect->{$s} = {} if(!exists($sect->{$s}));
+				if(!exists($sect->{$s})) {
+					if($s eq "test") {
+						$sect->{$s} = {};
+					} else {
+						$sect->{$s} = {
+							id        => undef,
+							whitelist => undef,
+							title     => undef,
+							est       => undef,
+							step      => undef,
+						};
+						lock_keys %{$sect->{$s}};
+					}
+				}
 				$sect = $sect->{$s};
 			}
 			fat("%s:%d: Bad line", $config_file, $fh->input_line_number)
@@ -310,7 +349,7 @@ sub load_configuration_file
 			fat("%s:%d: Bad key=val line: %s",
 					$config_file, $fh->input_line_number, $l)
 				if($l !~ m{^
-						(?<key> [^\s]+)
+						(?<key> (?:\d+/)?[a-z0-9_]+)
 						\s* = \s* 
 						(?<val> (?:[^"#][^#]*)?|"(?:\\"|\\[^"]|[^\\"])*")
 						\s* (?:\#.*)?  # ignore blanks/comments
@@ -338,7 +377,7 @@ sub load_configuration_file
 
 				$sect->{$k} = load_configuration_file__parse_whitelist
 						$config_file, $fh, $v;
-			} elsif($k =~ m{(\d+)/(action|in)}) {
+			} elsif($k =~ m{(\d+)/(action|in|est)}) {
 				my $s;
 				$s = $1 - 1;
 				$k = $2;
@@ -349,7 +388,7 @@ sub load_configuration_file
 					$v = load_configuration_file__parse_in
 						$config_file, $fh, $sect, $k, $v;
 				}
-				$sect->{step}->[$s] = { id => $s }
+				$sect->{step}->[$s] = { id => $s, est => undef }
 					if(!defined($sect->{step}->[$s]));
 				fat("%s:%d: Missing step", $config_file, $fh->input_line_number)
 					if(scalar(grep { !defined($_) } @{$sect->{step}}) > 0);
@@ -828,7 +867,7 @@ sub normalize_subject
 sub do_run_test_enroll
 {
 	my ($test, $step, $in, $wl, @pars) = @_;
-	my ($od, $cred, $cert);
+	my ($od, $cred, $cert, $est);
 
 	msg("Running step/enroll '%s/%s'", $step->{id}, $in->{id});
 
@@ -836,17 +875,22 @@ sub do_run_test_enroll
 	$od = test_get_out_dir($test->{id}, $step->{id}, $in->{id});
 	dir_create($od);
 
+	# get the est url (and credentials) for this test step/enrollment
+	$est  = $config{est}->{url};
+	$cred = $config{est}->{creds} if $config{est}->{creds};
+	($est, $cred) = est_url_parse($test->{est}, $cred) if $test->{est};
+	($est, $cred) = est_url_parse($step->{est}, $cred) if $step->{est};
+	($est, $cred) = est_url_parse($in->{est}, $cred)   if $in->{est};
+	$cred = $in->{crd} if defined($in->{crd});
+
 	# add basic parameters for enrollment
 	push(@pars,
+		-l => $est,
 		-o => $od,
 		-L => log_channel_get_path("test_log"),
 		-b => $config{cert_bits});
 
-	# push enrollment (or global) credentials parameter (if required)
-	$cred = $config{est}->{creds}
-		if defined($config{est}->{creds});
-	$cred = $in->{crd}
-		if defined($in->{crd});
+	# push enrollment credentials parameter (if required)
 	push(@pars, -u => $cred)
 		if defined($cred);
 
@@ -951,18 +995,24 @@ sub do_run_test_enroll
 sub do_run_test_command
 {
 	my ($test, $step, $wl, @pars) = @_;
-	my ($od);
+	my ($od, $est, $cred);
 
 	# get test/step/in output dir
 	$od = test_get_out_dir($test->{id}, $step->{id});
 	dir_create($od);
+
+	# get the est url (and credentials) for this test step
+	$est  = $config{est}->{url};
+	$cred = $config{est}->{creds} if $config{est}->{creds};
+	($est, $cred) = est_url_parse($test->{est}, $cred) if $test->{est};
+	($est, $cred) = est_url_parse($step->{est}, $cred) if $step->{est};
+
+	# push configured parameters
 	push(@pars,
+		-l => $est,
 		-L => log_channel_get_path("test_log"),
 		-o => $od);
-
-	# push EST credentials (if defined)
-	push(@pars, -u => $config{est}->{creds})
-		if($config{est}->{creds});
+	push(@pars, -u => $cred) if $cred;
 
 	# invoke command
 	msg("Command: %s", join(" ", $config{pest}, @pars, $step->{action}));
@@ -1068,7 +1118,6 @@ sub do_run_test
 			# common parameters (for PEST)
 			my @pars = (
 				-C => $config{est}->{ca},
-				-l => $config{est}->{url},
 				"-O",
 			);
 			push(@pars, "-v")
@@ -1244,7 +1293,7 @@ sub do_config_dump
 
 	do_config_dump__print_section
 		est => $config{est},
-		ok => [ qw( ca url strict creds issuer_subject_name ) ],
+		ok => [ qw( ca creds issuer_subject_name plain_base64 strict url ) ],
 		ko => [];
 	delete $config{est};
 
@@ -1260,14 +1309,15 @@ sub do_config_dump
 	delete $config{cert_by_id};
 
 	foreach my $t (sort { $a->{id} cmp $b->{id} } values %{$config{test}}) {
-		printf "[test %s]\n", $t->{id};
-		printf "title = %s\n", $t->{title};
-		delete $t->{title};
+		printf "[test %s]\n",  $t->{id};
+		printf "title = %s\n", $t->{title} if($t->{title}); delete $t->{title};
+		printf "est = %s\n",   $t->{est}   if($t->{est});   delete $t->{est};
 		print "whitelist =";
 		foreach my $we (@{$t->{whitelist}}) {
 			print " \\\n\t(";
 			printf "cred=%s, ", $we->{crd} if(defined($we->{crd}));
 			printf "cert=%s, ", $we->{pem} if(defined($we->{pem}));
+			printf "est=%s, ",  $we->{est} if(defined($we->{est}));
 			printf "%s)", $we->{rsn};
 		}
 		delete $t->{whitelist};
@@ -1279,6 +1329,7 @@ sub do_config_dump
 				print " \\\n\t\t(";
 				printf "cred=%s, ", $in->{crd} if(defined($in->{crd}));
 				printf "cert=%s, ", $in->{pem} if(defined($in->{pem}));
+				printf "est=%s, ",  $in->{est} if(defined($in->{est}));
 				printf "%s)", $in->{rsn};
 				printf "  %s%s",
 					$in->{out} !~ /^(\+\+|!!)$/ ? "> " : "",
@@ -1763,22 +1814,27 @@ actions can be observed easily in the following code excerpt:
 
    1. [test 3.1]
    2. title     = Reenrolling a device
-   3. whitelist = \
-   4.         (cred=estuser:estpwd, /CN=test_3.1) \
-   5.         (cert=test_3.1-1-1,   /CN=test_3.1) \
-   6.         (cert=test_3.1-2-1,   /CN=test_3.1)
-   7.         
-   8.         # enroll first -- leave enroll in 'test_3.1-1-1'
-   9.         1/action  = simpleenroll
-  10.         1/in      = \
-  11.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1-1-1
-  12.         
-  13.         # try to reenroll two times, chaining correct certs
-  14.         #        both tries should work
-  15.         2/action  = simplereenroll
-  16.         2/in      = \
-  17.                 (cert=test_3.1-1-1, /CN=test_3.1) > test_3.1-2-1 \
-  18.                 (cert=test_3.1-2-1, /CN=test_3.1) ++
+   3. est       = https://another.est.server.com:444/.well-known/est
+   4. whitelist = \
+   5.         (cred=estuser:estpwd, /CN=test_3.1) \
+   6.         (cert=test_3.1-1-1,   /CN=test_3.1) \
+   7.         (cert=test_3.1-2-1,   /CN=test_3.1)
+   8.         
+   9.         # enroll first -- leave enroll in 'test_3.1-1-1'
+  10.         1/action  = simpleenroll
+  11.         1/est     = https://another.est.server.com:442/.well-known/est
+  12.         1/in      = \
+  13.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1-1-1
+  14.         
+  15.         # try to reenroll two times, chaining correct certs
+  16.         #        both tries should work
+  17.         2/action  = simplereenroll
+  18.         2/in      = \
+  19.                 (cert=test_3.1-1-1, /CN=test_3.1) > test_3.1-2-1 \
+  20.                 (cert=test_3.1-2-1, /CN=test_3.1) ++ \
+  21.                 (cert=test_3.1-2-1, \
+  22.                  est=https://broken.est.server.com/,
+  23.                  /CN=test_3.1) !!
 
 Line by line:
 
@@ -1790,10 +1846,15 @@ Line by line:
 These two lines starts the test definition of test I<Reenrolling a device>,
 with id C<3.1>.
 
-   3. whitelist = \
-   4.         (cred=estuser:estpwd, /CN=test_3.1) \
-   5.         (cert=test_3.1-1-1,   /CN=test_3.1) \
-   6.         (cert=test_3.1-2-1,   /CN=test_3.1)
+   3. est       = http://another.est.server.com:444/.well-known/est
+
+This line overrides the global EST server configured in the C<[est]> section
+with a new default EST server for this test.
+
+   4. whitelist = \
+   5.         (cred=estuser:estpwd, /CN=test_3.1) \
+   6.         (cert=test_3.1-1-1,   /CN=test_3.1) \
+   7.         (cert=test_3.1-2-1,   /CN=test_3.1)
 
 The I<whitelist> parameters declares the upcoming authorized enrollments. In
 this example we are declaring that the following enrollments will be accepted:
@@ -1812,27 +1873,45 @@ C<test_3.1-2-1> certificate, and the same CN used before.
 
 =back
 
-   9.         1/action  = simpleenroll
-  10.         1/in      = \
-  11.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1-1-1
+  10.         1/action  = simpleenroll
+  11.         1/est     = https://another.est.server.com:442/.well-known/est
+  12.         1/in      = \
+  13.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1-1-1
 
 These two parameters describe the step 1. In this first step a client will
 request a X.509 certificate with the subject name C</CN=test_3.1>, and
-authenticating itself using secret credentials.
+authenticating itself using credentials C<estuser:estpwd>. Also, for this
+enrollment, the default EST server previously set in the global C<[est]>
+section and in line 2, is overrided again.
 
 The returned certificate will be stored and referenced in next steps by the
 certificate id C<test_3.1-1-1>.
 
-  15.         2/action  = simplereenroll
-  16.         2/in      = \
-  17.                 (cert=test_3.1-1-1, /CN=test_3.1) > test_3.1-2-1 \
-  18.                 (cert=test_3.1-2-1, /CN=test_3.1) ++
+  17.         2/action  = simplereenroll
+  18.         2/in      = \
+  19.                 (cert=test_3.1-1-1, /CN=test_3.1) > test_3.1-2-1 \
+  20.                 (cert=test_3.1-2-1, /CN=test_3.1) ++ \
+  21.                 (cert=test_3.1-2-1, \
+  22.                  est=https://broken.est.server.com/,
+  23.                  /CN=test_3.1) !!
 
-In this step, two reenrollments are performed sequentially. The first
-reenrollment uses the previous certificate C<test_3.1-1-1> and stores the new
-certificate in C<test_3.1-2-1>. The second reenrollment uses the certificate
-obtained in the previous reenrollment (C<test_3.1-2-1>). The C<++> particle
-makes explicit that this step must be succesful.
+In this step, three reenrollments are performed sequentially:
+
+=over 4
+
+1. The first reenrollment uses the previous certificate C<test_3.1-1-1> and
+stores the new certificate in C<test_3.1-2-1>.
+
+2. The second reenrollment uses the certificate obtained in the previous
+reenrollment (C<test_3.1-2-1>). The C<++> particle makes explicit that this
+step must be succesful.
+
+3. The third reenrollment is expectd to fail because it tries to enroll using
+the non-working C<broken.est.server.com>. This enrollment uses the parameter
+C<est> for overriding (again) any other EST server configured before for only
+this enrollment.
+
+=back
 
 =back
 
