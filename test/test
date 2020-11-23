@@ -59,6 +59,7 @@ my %config = (
 	test         => {},
 	hooks        => {
 		test_start         => undef,
+		test_end           => undef,
 		test_whitelist_add => undef,
 	},
 );
@@ -350,7 +351,7 @@ sub load_configuration_file
 					$config_file, $fh->input_line_number, $l)
 				if($l !~ m{^
 						(?<key> (?:\d+/)?[a-z0-9_]+)
-						\s* = \s* 
+						\s* = \s*
 						(?<val> (?:[^"#][^#]*)?|"(?:\\"|\\[^"]|[^\\"])*")
 						\s* (?:\#.*)?  # ignore blanks/comments
 					$}xi);
@@ -507,7 +508,7 @@ sub do_checkdata
 	foreach my $c (@{$config{certificates}}) {
 		# check certificates
 		do_checkdata__entry @{$c};
-	
+
 		# check info in 'cert_by_id' is correct
 		fat("Cert '%s' is not registered in 'cert_by_id'.", $c->[0])
 			if !exists($config{cert_by_id}->{$c->[0]});
@@ -760,7 +761,7 @@ sub test_get_file
 	my $step = shift;
 	my $in   = shift;
 	my $file = shift;
-	
+
 	return test_get_out_dir($tid, $step, $in)
 		. (defined($file) ? "/$file" : "");
 }
@@ -1142,6 +1143,14 @@ sub do_run_test
 		$error =~ s/\.$//;
 	};
 
+	# hook: end
+	if($config{hooks}->{test_end}) {
+		$error = sprintf("Test hook test_end '%s' failed with exit status %d.",
+				$config{hooks}->{test_end}, $!)
+			if system($config{hooks}->{test_end}, $test->{id}, $error || "");
+	}
+
+	# save status
 	test_set_status(
 		defined($error)
 			? (failed => $test->{id}, $error)
@@ -1299,7 +1308,7 @@ sub do_config_dump
 
 	do_config_dump__print_section
 		hooks => $config{hooks},
-		ok => [ qw( test_start test_whitelist_add ) ],
+		ok => [ qw( test_start test_end test_whitelist_add ) ],
 		ko => [];
 	delete $config{hooks};
 
@@ -1788,6 +1797,10 @@ The following hooks are supported at this moment:
 
 Path to the program that will be run each time a test is started.
 
+=item B<test_end>=I<path>
+
+Path to the program that will be run each time a test is finished.
+
 =item B<test_whitelist_add>=I<path>
 
 Path to a program that will be run for each element declared in a test
@@ -1819,13 +1832,13 @@ actions can be observed easily in the following code excerpt:
    5.         (cred=estuser:estpwd, /CN=test_3.1) \
    6.         (cert=test_3.1-1-1,   /CN=test_3.1) \
    7.         (cert=test_3.1-2-1,   /CN=test_3.1)
-   8.         
+   8.
    9.         # enroll first -- leave enroll in 'test_3.1-1-1'
   10.         1/action  = simpleenroll
   11.         1/est     = https://another.est.server.com:442/.well-known/est
   12.         1/in      = \
   13.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1-1-1
-  14.         
+  14.
   15.         # try to reenroll two times, chaining correct certs
   16.         #        both tries should work
   17.         2/action  = simplereenroll
@@ -1918,11 +1931,11 @@ this enrollment.
 In the described example above, B<all> steps and enrollments must be succesful
 to consider this test PASSED. Nevertheless, sometimes failing may be the
 correct option. Take a look into the following example:
- 
+
    1. [test 2.2]
    2. title     = Enroll 1 ok, 4 bad
    3. whitelist = (cred=estuser:estpwd,/CN=test_2.2)
-   4. 
+   4.
    5.         1/action  = simpleenroll
    6.         1/in      = \
    7.                 (cred=estuser:estpwd, /CN=test_2.2) ++ \
@@ -2003,17 +2016,40 @@ A custom program can be triggered each time a new test is started. Example of
 I<test start> hook:
 
   #!/bin/bash
-  
+
   TEST_ID="$1"
-  
+
   msg()
   {
     echo "HOOK(test_start): $@"
   }
-  
+
   msg "New test started"
   msg "  Test ID [$TEST_ID]"
-  
+
+  exit 0
+
+=head2 Test finished
+
+A custom program can be triggered each time a test is finished. Example of
+I<test finished> hook:
+
+  #!/bin/bash
+
+  TEST_ID="$1"
+  ERROR="$2"
+
+  msg()
+  {
+    echo "HOOK(test_end): $@"
+  }
+
+  STATUS="finished succesfully"
+  if [ "$ERROR" ]; then
+          STATUS="failed with error [$ERROR]"
+  fi
+  msg "Test [$TEST_ID] $STATUS"
+
   exit 0
 
 =head2 Whitelist population
@@ -2022,7 +2058,7 @@ A custom program can be triggered for each authorization declared in a test
 whitelist. Example:
 
   #!/bin/bash
-  
+
   TEST_ID="$1"               ; shift
   CERTIFICATE_ID="$1"        ; shift
   CERTIFICATE_SN="$1"        ; shift
@@ -2030,15 +2066,15 @@ whitelist. Example:
   CERTIFICATE_ISSUER_SN="$1" ; shift
   CREDS="$1"                 ; shift
   REQUESTED_SN="$1"          ; shift
-  
+
   msg()
   {
     echo "HOOK(whitelist_add): $@"
   }
-  
+
   msg "Adding whitelist entry to test [$TEST_ID]"
   msg "  - Requested subject [$REQUESTED_SN]"
-  
+
   if [ "$CERTIFICATE_ID" ]; then
     msg "  - Certificate based authentication"
     msg "    - Certificate Issuer ID  [$CERTIFICATE_ISSUER_ID] ($CERTIFICATE_ISSUER_SN)"
@@ -2051,7 +2087,7 @@ whitelist. Example:
       exit 1
     fi
   fi
-  
+
   if [ "$CREDS" ]; then
     msg "  - EST credentials: $CREDS"
   fi
