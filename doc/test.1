@@ -129,7 +129,7 @@
 .\" ========================================================================
 .\"
 .IX Title "TEST 1"
-.TH TEST 1 "2020-11-18" "perl v5.26.1" "User Contributed Perl Documentation"
+.TH TEST 1 "2020-11-23" "perl v5.26.1" "User Contributed Perl Documentation"
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -450,6 +450,9 @@ The following hooks are supported at this moment:
 .IP "\fBtest_start\fR=\fIpath\fR" 4
 .IX Item "test_start=path"
 Path to the program that will be run each time a test is started.
+.IP "\fBtest_end\fR=\fIpath\fR" 4
+.IX Item "test_end=path"
+Path to the program that will be run each time a test is finished.
 .IP "\fBtest_whitelist_add\fR=\fIpath\fR" 4
 .IX Item "test_whitelist_add=path"
 Path to a program that will be run for each element declared in a test
@@ -482,13 +485,13 @@ actions can be observed easily in the following code excerpt:
 \&   5.         (cred=estuser:estpwd, /CN=test_3.1) \e
 \&   6.         (cert=test_3.1\-1\-1,   /CN=test_3.1) \e
 \&   7.         (cert=test_3.1\-2\-1,   /CN=test_3.1)
-\&   8.         
+\&   8.
 \&   9.         # enroll first \-\- leave enroll in \*(Aqtest_3.1\-1\-1\*(Aq
 \&  10.         1/action  = simpleenroll
 \&  11.         1/est     = https://another.est.server.com:442/.well\-known/est
 \&  12.         1/in      = \e
 \&  13.                 (cred=estuser:estpwd,/CN=test_3.1) > test_3.1\-1\-1
-\&  14.         
+\&  14.
 \&  15.         # try to reenroll two times, chaining correct certs
 \&  16.         #        both tries should work
 \&  17.         2/action  = simplereenroll
@@ -595,7 +598,7 @@ correct option. Take a look into the following example:
 \&   1. [test 2.2]
 \&   2. title     = Enroll 1 ok, 4 bad
 \&   3. whitelist = (cred=estuser:estpwd,/CN=test_2.2)
-\&   4. 
+\&   4.
 \&   5.         1/action  = simpleenroll
 \&   6.         1/in      = \e
 \&   7.                 (cred=estuser:estpwd, /CN=test_2.2) ++ \e
@@ -675,17 +678,41 @@ A custom program can be triggered each time a new test is started. Example of
 .PP
 .Vb 1
 \&  #!/bin/bash
-\&  
+\&
 \&  TEST_ID="$1"
-\&  
+\&
 \&  msg()
 \&  {
 \&    echo "HOOK(test_start): $@"
 \&  }
-\&  
+\&
 \&  msg "New test started"
 \&  msg "  Test ID [$TEST_ID]"
-\&  
+\&
+\&  exit 0
+.Ve
+.SS "Test finished"
+.IX Subsection "Test finished"
+A custom program can be triggered each time a test is finished. Example of
+\&\fItest finished\fR hook:
+.PP
+.Vb 1
+\&  #!/bin/bash
+\&
+\&  TEST_ID="$1"
+\&  ERROR="$2"
+\&
+\&  msg()
+\&  {
+\&    echo "HOOK(test_end): $@"
+\&  }
+\&
+\&  STATUS="finished succesfully"
+\&  if [ "$ERROR" ]; then
+\&          STATUS="failed with error [$ERROR]"
+\&  fi
+\&  msg "Test [$TEST_ID] $STATUS"
+\&
 \&  exit 0
 .Ve
 .SS "Whitelist population"
@@ -695,7 +722,7 @@ whitelist. Example:
 .PP
 .Vb 1
 \&  #!/bin/bash
-\&  
+\&
 \&  TEST_ID="$1"               ; shift
 \&  CERTIFICATE_ID="$1"        ; shift
 \&  CERTIFICATE_SN="$1"        ; shift
@@ -703,15 +730,15 @@ whitelist. Example:
 \&  CERTIFICATE_ISSUER_SN="$1" ; shift
 \&  CREDS="$1"                 ; shift
 \&  REQUESTED_SN="$1"          ; shift
-\&  
+\&
 \&  msg()
 \&  {
 \&    echo "HOOK(whitelist_add): $@"
 \&  }
-\&  
+\&
 \&  msg "Adding whitelist entry to test [$TEST_ID]"
 \&  msg "  \- Requested subject [$REQUESTED_SN]"
-\&  
+\&
 \&  if [ "$CERTIFICATE_ID" ]; then
 \&    msg "  \- Certificate based authentication"
 \&    msg "    \- Certificate Issuer ID  [$CERTIFICATE_ISSUER_ID] ($CERTIFICATE_ISSUER_SN)"
@@ -724,7 +751,7 @@ whitelist. Example:
 \&      exit 1
 \&    fi
 \&  fi
-\&  
+\&
 \&  if [ "$CREDS" ]; then
 \&    msg "  \- EST credentials: $CREDS"
 \&  fi

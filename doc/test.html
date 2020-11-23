@@ -35,6 +35,7 @@
   <li><a href="#HOOKS">HOOKS</a>
     <ul>
       <li><a href="#Test-start">Test start</a></li>
+      <li><a href="#Test-finished">Test finished</a></li>
       <li><a href="#Whitelist-population">Whitelist population</a></li>
     </ul>
   </li>
@@ -436,6 +437,12 @@
 <p>Path to the program that will be run each time a test is started.</p>
 
 </dd>
+<dt id="test_end-path"><b>test_end</b>=<i>path</i></dt>
+<dd>
+
+<p>Path to the program that will be run each time a test is finished.</p>
+
+</dd>
 <dt id="test_whitelist_add-path"><b>test_whitelist_add</b>=<i>path</i></dt>
 <dd>
 
@@ -465,13 +472,13 @@
    5.         (cred=estuser:estpwd, /CN=test_3.1) \
    6.         (cert=test_3.1-1-1,   /CN=test_3.1) \
    7.         (cert=test_3.1-2-1,   /CN=test_3.1)
-   8.         
+   8.
    9.         # enroll first -- leave enroll in &#39;test_3.1-1-1&#39;
   10.         1/action  = simpleenroll
   11.         1/est     = https://another.est.server.com:442/.well-known/est
   12.         1/in      = \
   13.                 (cred=estuser:estpwd,/CN=test_3.1) &gt; test_3.1-1-1
-  14.         
+  14.
   15.         # try to reenroll two times, chaining correct certs
   16.         #        both tries should work
   17.         2/action  = simplereenroll
@@ -548,7 +555,7 @@
 <pre><code>   1. [test 2.2]
    2. title     = Enroll 1 ok, 4 bad
    3. whitelist = (cred=estuser:estpwd,/CN=test_2.2)
-   4. 
+   4.
    5.         1/action  = simpleenroll
    6.         1/in      = \
    7.                 (cred=estuser:estpwd, /CN=test_2.2) ++ \
@@ -627,17 +634,39 @@
 <p>A custom program can be triggered each time a new test is started. Example of <i>test start</i> hook:</p>
 
 <pre><code>  #!/bin/bash
-  
+
   TEST_ID=&quot;$1&quot;
-  
+
   msg()
   {
     echo &quot;HOOK(test_start): $@&quot;
   }
-  
+
   msg &quot;New test started&quot;
   msg &quot;  Test ID [$TEST_ID]&quot;
-  
+
+  exit 0</code></pre>
+
+<h2 id="Test-finished">Test finished</h2>
+
+<p>A custom program can be triggered each time a test is finished. Example of <i>test finished</i> hook:</p>
+
+<pre><code>  #!/bin/bash
+
+  TEST_ID=&quot;$1&quot;
+  ERROR=&quot;$2&quot;
+
+  msg()
+  {
+    echo &quot;HOOK(test_end): $@&quot;
+  }
+
+  STATUS=&quot;finished succesfully&quot;
+  if [ &quot;$ERROR&quot; ]; then
+          STATUS=&quot;failed with error [$ERROR]&quot;
+  fi
+  msg &quot;Test [$TEST_ID] $STATUS&quot;
+
   exit 0</code></pre>
 
 <h2 id="Whitelist-population">Whitelist population</h2>
@@ -645,7 +674,7 @@
 <p>A custom program can be triggered for each authorization declared in a test whitelist. Example:</p>
 
 <pre><code>  #!/bin/bash
-  
+
   TEST_ID=&quot;$1&quot;               ; shift
   CERTIFICATE_ID=&quot;$1&quot;        ; shift
   CERTIFICATE_SN=&quot;$1&quot;        ; shift
@@ -653,15 +682,15 @@
   CERTIFICATE_ISSUER_SN=&quot;$1&quot; ; shift
   CREDS=&quot;$1&quot;                 ; shift
   REQUESTED_SN=&quot;$1&quot;          ; shift
-  
+
   msg()
   {
     echo &quot;HOOK(whitelist_add): $@&quot;
   }
-  
+
   msg &quot;Adding whitelist entry to test [$TEST_ID]&quot;
   msg &quot;  - Requested subject [$REQUESTED_SN]&quot;
-  
+
   if [ &quot;$CERTIFICATE_ID&quot; ]; then
     msg &quot;  - Certificate based authentication&quot;
     msg &quot;    - Certificate Issuer ID  [$CERTIFICATE_ISSUER_ID] ($CERTIFICATE_ISSUER_SN)&quot;
@@ -674,7 +703,7 @@
       exit 1
     fi
   fi
-  
+
   if [ &quot;$CREDS&quot; ]; then
     msg &quot;  - EST credentials: $CREDS&quot;
   fi
