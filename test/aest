@@ -206,6 +206,8 @@ sub do_auth_add
 	my $req_subject    = shift @params;
 
 	# create if not exits
+	msg("Adding entry (%s) => (%s, %s)",
+		$aut_subject, $aut_issuer_pem, $req_subject);
 	auth_st_add(
 		$aut_subject,
 		aut_issuer_pem => $aut_issuer_pem,
@@ -243,6 +245,7 @@ sub do_reset
 			join("\" \"", @params))
 		if(scalar(@params) != 0);
 
+	msg("Cleaning database.");
 	%auth = ();
 }
 
@@ -331,7 +334,6 @@ eval {
 
 # process actions
 my $action = shift @ARGV;
-dbg "Action '%s'", $action;
 if   ($action eq "nop")     { msg("NOP!");         }
 elsif($action eq "add")     { do_auth_add @ARGV;   }
 elsif($action eq "check")   { do_auth_check @ARGV; }
