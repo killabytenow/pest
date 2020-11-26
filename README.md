@@ -21,6 +21,9 @@ TEST is accompanied by two test suite examples:
 Both files have detailed descriptions about its format, syntax, features and
 configuration parameters.
 
+**AEST** is another Perl program designed for integrate with TEST and your EST
+server. It implements an EST authorizator based on X.509 certificates.
+
 
 Installation
 ------------
@@ -38,6 +41,10 @@ https://htmlpreview.github.io/?https://github.com/killabytenow/pest/blob/main/do
 TEST is fully documented using the Pod documentation format.
 Use `./test/test -m` for reading the documentation. You can read it online in
 https://htmlpreview.github.io/?https://github.com/killabytenow/pest/blob/main/doc/test.html
+
+AEST is fully documented using the Pod documentation format.
+Use `./test/aest -m` for reading the documentation. You can read it online in
+https://htmlpreview.github.io/?https://github.com/killabytenow/pest/blob/main/doc/aest.html
 
 You can generate documentation in TXT, MAN and HTML format executing `make`.
 

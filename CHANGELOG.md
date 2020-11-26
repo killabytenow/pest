@@ -4,9 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- (test) Fixed bug in test 3.1.
+### Added
+
 - (aest) Added an authorizator example for deploying an EST server based on a
   whitelist.
+- (aest) Added hooks for using the AEST authorizator.
+
+### Changed
+
+- (test) Fixed bug in test 3.1.
 
 ## [0.0.7] - 2020-11-23
 

@@ -30,6 +30,9 @@ directory:
 
 The following files are produced:
 
+    doc/aest.1     AEST Manual page (you can read it with man -l pest.1)
+    doc/aest.html  AEST HTML formatted manual page
+    doc/aest.txt   AEST TXT formatted manual page
     doc/pest.1     PEST Manual page (you can read it with man -l pest.1)
     doc/pest.html  PEST HTML formatted manual page
     doc/pest.txt   PEST TXT formatted manual page

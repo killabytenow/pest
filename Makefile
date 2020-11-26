@@ -17,7 +17,7 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-TARGET=pest test
+TARGET=aest pest test
 
 all: doc $(TARGET:%=doc/%.1) $(TARGET:%=doc/%.html) $(TARGET:%=doc/%.txt)
 
@@ -31,6 +31,15 @@ doc/pest.html : pest
 	pod2html $< > $@
 
 doc/pest.txt: pest
+	pod2text $< > $@
+
+doc/aest.1: test/aest
+	pod2man $< > $@
+
+doc/aest.html : test/aest
+	pod2html $< > $@
+
+doc/aest.txt: test/aest
 	pod2text $< > $@
 
 doc/test.1: test/test
