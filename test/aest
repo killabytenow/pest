@@ -29,7 +29,7 @@ use POSIX;
 use Pod::Usage;
 use Storable qw(thaw freeze);
 
-our $AEST_VERSION = "0.0.7";
+our $AEST_VERSION = "0.0.8";
 
 my %config = (
 	certdir   => undef,

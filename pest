@@ -36,7 +36,7 @@ use MIME::Base64;
 use POSIX;
 use Pod::Usage;
 
-our $PEST_VERSION = "0.0.7";
+our $PEST_VERSION = "0.0.8";
 
 use constant EST_ASN1 =>
 q{

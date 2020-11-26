@@ -29,7 +29,7 @@ use Hash::Util 'lock_keys';
 use POSIX;
 use Pod::Usage;
 
-our $TEST_VERSION = "0.0.7";
+our $TEST_VERSION = "0.0.8";
 our %TEST_STATUS_TO_TEXT = (
 	ok      => "Ok",
 	pending => "Pending",
