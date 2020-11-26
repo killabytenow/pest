@@ -1,5 +1,6 @@
 pod2htmd.tmp
 test/certs
 test/out
+test/aest.db
 test/demo/certs
 test/demo/out

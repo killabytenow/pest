@@ -1,0 +1,579 @@
+#!/usr/bin/perl
+#
+# aest - Authorizator for EST service
+#
+#    Copyright (C) 2020 Gerardo García Peña <killabytenow@gmail.com>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+
+use strict;
+use warnings;
+use utf8;
+
+use DB_File;
+use Getopt::Long qw(:config gnu_getopt);
+use Hash::Util 'lock_keys';
+use POSIX;
+use Pod::Usage;
+use Storable qw(thaw freeze);
+
+our $AEST_VERSION = "0.0.7";
+
+my %config = (
+	certdir   => undef,
+	aestdb    => "aest.db",
+	verbose   => undef,
+	debug     => undef,
+	no_delete => undef,
+);
+lock_keys %config;
+my %auth;
+
+###############################################################################
+# COMMON FUNCS
+###############################################################################
+
+my %__log_channels;
+
+sub __msglog
+{
+	my $prefix = shift;
+	my $format = shift;
+	$prefix = $prefix ? "$0:$prefix:" : "$0:";
+	my $ts = POSIX::strftime("[%Y-%m-%d %H:%M:%S] ", localtime);
+	my @msg = split(/\n/,
+			join("", scalar(@_) > 0
+					? sprintf($format, @_)
+					: $format || " "));
+
+	foreach my $lc (values %__log_channels) {
+		my $fh = $lc->[1];
+		print $fh
+			(join("\n",
+				map { sprintf("%s%s %s",
+					$lc->[2] ? $ts : "", $prefix, $_) }
+					@msg)
+			. "\n");
+	}
+}
+
+sub fat { __msglog("FAT", @_); exit(1); }
+sub err { __msglog("ERR", @_); }
+sub wrn { __msglog("WRN", @_); }
+sub dbg { __msglog("DBG", @_) if($config{verbose}); }
+sub msg { __msglog("MSG", @_); }
+sub out { my $tag = shift; __msglog("OUT[$tag]", @_); }
+
+sub log_channel_open
+{
+	my ($id, $path, $fh) = @_;
+
+	fat("Log '%s' already opened.", $id)
+		if exists($__log_channels{$id});
+	fat("Cannot open log '%s' on path '%s': %s", $id, $path, $!)
+		if(defined($path) && !open($fh, ">>", $path));
+
+	$__log_channels{$id} = [ $path, $fh, defined($path) ];
+}
+log_channel_open(STDERR => undef, *STDERR);
+
+sub log_channel_close
+{
+	my ($id) = @_;
+
+	fat("Log '%s' is not opened.", $id)
+		if !exists($__log_channels{$id});
+	fat("Cannot close log '%s'", $id)
+		if(!defined($__log_channels{$id}->[0]));
+
+	close($__log_channels{$id}->[1]);
+	delete $__log_channels{$id};
+}
+
+sub log_channel_get_path
+{
+	my ($id) = @_;
+
+	fat("Log '%s' is not opened.", $id)
+		if !exists($__log_channels{$id});
+	fat("Log '%s' has not a path associated.", $id)
+		if !defined $__log_channels{$id}->[0];
+
+	return $__log_channels{$id}->[0];
+}
+
+sub indent
+{
+	my $indent = shift;
+	$indent = " " x $indent if $indent =~ /^([1-9][0-9]|0)$/;
+	return $indent . join("\n$indent", split(/\n/, join("", @_)));
+}
+
+###############################################################################
+# OPENSSL
+###############################################################################
+
+sub get_subject_from_pem
+{
+	my $pem = shift;
+	my $sn;
+
+	if(open(my $fh, "-|", qq(openssl x509 -in "$pem" -nameopt compat -subject -noout))) {
+		$sn = <$fh>;
+		chomp $sn;
+		$sn =~ s/^subject=//;
+		close($fh);
+	} else {
+		fat("%s: Cannot read subject: %s", $pem, $!);
+	}
+
+	return $sn;
+}
+
+sub openssl_verify
+{
+	my ($ca_chain_pem, $pem) = @_;
+
+	return !system(qq(openssl verify -CAfile $ca_chain_pem $pem));
+}
+
+###############################################################################
+# DB
+###############################################################################
+
+sub auth_ld
+{
+	my ($aut_subject) = @_;
+
+	fat("Entry '%s' does not exists.", $aut_subject)
+		if !exists($auth{$aut_subject});
+	
+	return thaw($auth{$aut_subject});
+}
+
+sub auth_st
+{
+	my ($aut_subject, @aut) = @_;
+
+	fat("Entry '%s' does not exists.", $aut_subject)
+		if !exists($auth{$aut_subject});
+	
+	$auth{$aut_subject} = freeze(\@aut);
+
+	return $a;
+}
+
+sub auth_st_add
+{
+	my ($aut_subject, @aut) = @_;
+
+	# recover existing entry, add and save
+	my $a = exists($auth{$aut_subject}) ? thaw($auth{$aut_subject}) : [];
+	push(@{$a}, { @aut });
+	$auth{$aut_subject} = freeze($a);
+
+	return $a;
+}
+
+###############################################################################
+# COMMANDS
+###############################################################################
+
+sub do_auth_add
+{
+	my (@params) = @_;
+
+	# fetch params
+	fat("Expected (aut_subject, aut_issuer_pem, req_subject)\n"
+		. "Too %s parameters: \"%s\"",
+			scalar(@params) < 3 ? "few" : "many",
+			join("\" \"", @params))
+		if(scalar(@params) != 3);
+	my $aut_subject    = shift @params;
+	my $aut_issuer_pem = shift @params;
+	my $req_subject    = shift @params;
+
+	# create if not exits
+	auth_st_add(
+		$aut_subject,
+		aut_issuer_pem => $aut_issuer_pem,
+		req_subject    => $req_subject);
+}
+
+sub do_auth_list
+{
+	my (@params) = @_;
+
+	# fetch params
+	fat("No args expected. Too %s parameters: \"%s\"",
+			scalar(@params) < 0 ? "few" : "many",
+			join("\" \"", @params))
+		if(scalar(@params) != 0);
+
+	foreach my $s (sort keys %auth) {
+		msg("Authorizations for '%s':", $s);
+		foreach my $a (@{auth_ld($s)}) {
+			msg("    Issued by: '%s' (%s)",
+				get_subject_from_pem("$config{certdir}/$a->{aut_issuer_pem}.pem"),
+				$a->{aut_issuer_pem});
+			msg("      => Identity: '%s'", $a->{req_subject});
+		}
+	}
+}
+
+sub do_reset
+{
+	my (@params) = @_;
+
+	# fetch params
+	fat("No args expected. Too %s parameters: \"%s\"",
+			scalar(@params) < 0 ? "few" : "many",
+			join("\" \"", @params))
+		if(scalar(@params) != 0);
+
+	%auth = ();
+}
+
+sub do_auth_check
+{
+	my (@params) = @_;
+	my ($aut_pem, $req_subject, $aut_subject, @al, $a);
+
+	# fetch params
+	fat("Expected (aut_pem, req_subject)\n"
+		. "Too %s parameters: \"%s\"",
+			scalar(@params) < 2 ? "few" : "many",
+			join("\" \"", @params))
+		if(scalar(@params) != 2);
+	$aut_pem     = shift @params;
+	$req_subject = shift @params;
+	$aut_subject = get_subject_from_pem($aut_pem);
+
+	msg("Checking '%s' (%s) requesting '%s'.", $aut_subject, $aut_pem, $req_subject);
+
+	@al = @{auth_ld($aut_subject)};
+	for(my $i = 0; $i < scalar(@al); $i++) {
+		# fetch current auth entry
+		$a = $al[$i];
+
+		dbg("  - signer '%s', requested '%s'", $a->{aut_issuer_pem}, $a->{req_subject});
+		if($a->{req_subject} eq $req_subject
+		&& openssl_verify("$config{certdir}/$a->{aut_issuer_pem}.chain.pem" => $aut_pem)) {
+			msg("Can enroll!");
+			if(!$config{no_delete}) {
+				dbg("  - Deleting seleted auth");
+				splice @al, $i, 1;
+				auth_st($aut_subject => @al);
+			} else {
+				dbg("  - Entry not deleted");
+			}
+			return 1;
+		}
+	}
+
+	fat("Cannot enroll");
+}
+
+###############################################################################
+# MAIN PROGRAM
+###############################################################################
+
+# get command line options
+GetOptions(
+	"d|cert-dir=s"  => \$config{certdir},
+	"D|debug"       => sub { $config{debug} = $config{verbose} = 1; },
+	"h|help"        => sub { pod2usage(-exitval => 0, -verbose => 1); },
+	"m|man"         => sub { pod2usage(-exitval => 0, -verbose => 2); },
+	"N|no-delete"   => \$config{no_delete},
+	"v|verbose"     => \$config{verbose},
+	"V|version"
+		=> sub {
+			print "aest $AEST_VERSION (C) Copyright 2020 Gerardo Garcia Pena\n";
+			print "This program comes with ABSOLUTELY NO WARRANTY.\n";
+			print "This is free software, and you are welcome to redistribute it\n";
+			print "under certain conditions. Read the COPYING file for details.\n";
+			exit 0;
+		},
+) or pod2usage(
+		-message => "Error in command line arguments.",
+		-exitval => 1,
+		-verbose => 1,
+	);
+
+# check options and command is ok
+eval {
+	die "Need action" if(scalar(@ARGV) < 1);
+	die "The CERT dir is a mandatory parameter." if !$config{certdir};
+
+	tie %auth, "DB_File", $config{aestdb}, O_RDWR|O_CREAT, 0666, $DB_HASH
+               or die "Cannot open file '$config{aestdb}': $!\n";
+
+	1;
+} or do {
+	my $m = $@;
+	chomp $m;
+	$m =~ s/ at .* line \d+\.$//;
+	$m =~ s/\.$//;
+	fat("$m. Use --help for more options.");
+};
+
+# process actions
+my $action = shift @ARGV;
+dbg "Action '%s'", $action;
+if   ($action eq "nop")     { msg("NOP!");         }
+elsif($action eq "add")     { do_auth_add @ARGV;   }
+elsif($action eq "check")   { do_auth_check @ARGV; }
+elsif($action eq "list")    { do_auth_list @ARGV;  }
+elsif($action eq "reset")   { do_reset @ARGV;      }
+else { fat("Unknown action '%s'.", $action); };
+
+untie %auth;
+
+1;
+__END__
+
+=head1 NAME
+
+aest - Authorizator for EST service
+
+=head1 SYNOPSIS
+
+=head2 Examples:
+
+=over 4
+
+  ./aest [options] [actions ...]
+  ./aest -d certs add "/CN=auth subject" signer_id "/CN=assigned subject"
+  ./aest -d certs list
+  ./aest -d certs check aut.pem "/CN=requested subject"
+  ./aest -k -d certs check aut.pem "/CN=requested subject"
+  ./aest -D -d certs check aut.pem "/CN=requested subject"
+  ./aest -d certs reset
+
+=back
+
+=head2 Options:
+
+=over 4
+
+  -d, --cert-dir=s    Directory with certificates generated by TEST.
+  -D, --debug         Print debug information.
+  -h, --help          Brief help message.
+  -m, --man           Full documentation.
+  -N, --no-delete     Do not delete checked entries by action 'check'
+  -v, --verbose       Verbose messages.
+  -V, --version       Print version information.
+
+=back
+
+=head2 Actions:
+
+=over 4
+
+  add           Add a new entry in the whitelist.
+  check         Check if a PEM file requesting certain subject is allowed to
+                enroll. This action also removes authorized entries.
+  list          List whitelist entries.
+  reset         Clean database
+  nop           NOP
+
+=back
+
+=head1 DESCRIPTION
+
+B<AEST> is a simple authorizer for integrating with a EST service. It decides,
+according a whitelist, if a device can enroll (or not).
+
+=head1 ACTIONS
+
+Each invocation to B<AEST> must be accompanied by an action:
+
+=over 4
+
+=over 4
+
+=item B<add>
+
+This action adds a new entry in the whitelist. It requires the following
+parameters:
+
+=over 4
+
+=item C<authentication_subject>
+
+The subject found in the certificate that will be used for authenticating
+against the EST server.
+
+=item C<authentication_issuer_id>
+
+The ID used for signing the certificate in the C<test.conf> configuration file
+in the C<[certificates]> section. For instance, C<ManufB> refers to the
+I<Manufacturer B> Sub-CA.
+
+=item C<assigned_subject_name>
+
+When a device uses EST for enrolling, it may ask for a new subject name. This
+parameter is the subject name expected to be requested by the device. Note that
+it may be different from the C<authentication_subject>.
+
+=back
+
+Example:
+
+    ./authorizator -d certs \
+        add "/CN=modelB SN 00110-0001/OU=Comm devs/O=RCU/C=UK" \
+        ManufB \
+        "/CN=dec001.testca/O=testca/C=ES"
+
+=item B<check>
+
+Check if a PEM file requesting certain subject is allowed to enroll. This
+action also removes authorized entries.
+
+The EST server should call this action passing the following arguments:
+
+=over 4
+
+=item C<authentication_PEM_File>
+
+The EST server must extract the client certificate used during TLS
+authentication, save it to disk and pass its path to this program.
+
+=item C<requested_subject>
+
+This is the requested subject during the enrollment. The EST must extract it
+from the CSR passed by the client.
+
+=back
+
+This command exits with code 0 if everything is OK, with a exit code different
+of zero if some error happened.
+
+By default, this command removes the entry that matched succesfully with this
+authentication. If you want to keep the whitelist untouched, then add the C<-k>
+flag parameter.
+
+Example of invocations:
+
+  $ ./aest -D -d certs check certs/dev002.pem \
+                             "/CN=dec001.testca/O=testca/C=ES" \
+    && echo "ENROLLED!"
+  ./aest:DBG: Action 'check'
+  ./aest:MSG: Checking '/CN=modelB SN 00110-0001/OU=Comm devs/O=RCU/C=UK' (certs/dev002.pem) requesting '/CN=dec001.testca/O=testca/C=ES'.
+  ./aest:FAT: Cannot enroll
+  
+  $ ./aest -D -d certs check certs/dev002.pem \
+                             "/CN=dec001.testca/O=testca/C=ES" \
+    && echo "ENROLLED!"
+  ./aest:DBG: Action 'check'
+  ./aest:MSG: Checking '/CN=modelB SN 00110-0001/OU=Comm devs/O=RCU/C=UK' ...
+            ...(certs/dev002.pem) requesting '/CN=dec001.testca/O=testca/C=ES'.
+  ./aest:DBG:   - signer 'ManufB', requested '/CN=dec001.testca/O=testca/C=ES'
+  certs/dev002.pem: OK
+  ./aest:MSG: Can enroll!
+  ./aest:DBG:   - Deleting seleted auth
+  ENROLLED!
+
+=item B<list>
+
+List whitelist entries.
+
+
+=item B<reset>
+
+Clean database. Delete all entries.
+
+=item B<nop>
+
+Nothing to see here. Move along.
+
+=back
+
+=back
+
+=head1 OPTIONS
+
+B<AEST> supports the following options:
+
+=over 4
+
+=over 4
+
+=item B<-d>, B<--cert-dir>=I<s>
+
+Directory with certificates generated by TEST.
+
+=item B<-D>, B<--debug>
+
+Dump HTTP communications and other useful debug information. This flag also enables
+verbosity (see I<-v>).
+
+=item B<-h>, B<--help>
+
+Print a brief help message and exits.
+
+=item B<-m>, B<--man>
+
+Prints the manual page and exits.
+
+=item B<-N>, B<--no-delete>
+
+Do not delete entries from the whitelist that have been succesfully matched by
+action 'check'. It allows to verify if a certain enrollment may work without
+altering the whitelist database.
+
+=item B<-v>, B<--verbose>
+
+Verbose messages.
+
+=item B<-V>, B<--version>
+
+Print version information.
+
+=back
+
+=back
+
+=head1 SEE ALSO
+
+=over 8
+
+=item L<pest>
+
+PEST manual page.
+
+=item L<test>
+
+TEST manual page.
+
+=item L<test.conf>
+
+A complete test suite for testing an EST server supporting enrollments based on
+third-party CA issued certificates. This means that clients authenticate
+themselves using a certificate belonging to an external CA during enrollment.
+Once they are enrolled, re-enrollments are conducted using the EST CA.
+
+=item L<demo/demo.conf>
+
+A complete (and simpler) test suite for testing the public EST service found in
+L<http://testrfc7030.com/>.
+
+=item L<http://www.testrfc7030.com/>
+
+This server can be used to test the EST protocol as defined in RFC 7030.
+
+=back
+
+=cut
