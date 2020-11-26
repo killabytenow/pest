@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.0.8] - 2020-11-26
+
 ### Added
 
 - (aest) Added an authorizator example for deploying an EST server based on a
