@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- (aest) Added option -a|--aest-db=s for configuring the path to the aest.db
+  file.
+
 ### Changed
 
 - (aest) Fixed typo in AEST doc.
