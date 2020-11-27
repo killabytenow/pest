@@ -11,6 +11,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- (test) Added TESTCA in the internal CA dictionary & copy the EST CA PEM chain
+  to the certs directory.
 - (aest) Fixed typo in AEST doc.
 
 ## [0.0.8] - 2020-11-26

@@ -28,6 +28,7 @@ use Getopt::Long qw(:config gnu_getopt);
 use Hash::Util 'lock_keys';
 use POSIX;
 use Pod::Usage;
+use File::Copy;
 
 our $TEST_VERSION = "0.0.9";
 our %TEST_STATUS_TO_TEXT = (
@@ -440,6 +441,23 @@ sub load_configuration_files
 		if !$config{outdir};
 
 	# fix certificates and create cert_by_id
+	# 0 - copy the pem chain file referred by the 'ca' parameter to the
+	# repository of certificates
+	copy($config{est}->{ca}, "$config{certdir}/ESTCA.pem")
+		or fat("Cannot copy EST CA %s PEM file to %s: %s",
+			$config{est}->{ca}, $config{certdir}, $!);
+
+	$config{cert_by_id}->{ESTCA} = {
+		temp      => 0,
+		id        => "ESTCA",
+		ca        => 1,
+		subject   => $config{est}->{issuer_subject_name},
+		issuer_id => "ESTCA",
+		issuer_sn => "ESTCA",
+		pem       => "$config{certdir}/ESTCA.pem",
+		key       => undef,
+	};
+
 	# 1 - fill cert_by_id
 	foreach my $cl (@{$config{certificates}}) {
 		$cl->[1] = ($cl->[1] =~ /^y(es)?$/i);
