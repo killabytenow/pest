@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.0.9] - 2020-11-27
+
 ### Added
 
 - (aest) Added option -a|--aest-db=s for configuring the path to the aest.db
