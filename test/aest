@@ -295,7 +295,7 @@ sub do_auth_check
 
 # get command line options
 GetOptions(
-	"a|aest-db"      => \$config{aestdb},
+	"a|aest-db=s"    => \$config{aestdb},
 	"d|cert-dir=s"   => \$config{certdir},
 	"D|debug"        => sub { $config{debug} = $config{verbose} = 1; },
 	"h|help"         => sub { pod2usage(-exitval => 0, -verbose => 1); },
@@ -323,6 +323,10 @@ eval {
 
 	tie %auth, "DB_File", $config{aestdb}, O_RDWR|O_CREAT, 0666, $DB_HASH
                or die "Cannot open file '$config{aestdb}': $!\n";
+
+	dbg("Configured options:");	
+	dbg("    - %-10s = %s", $_, $config{$_} || "<<not-set>>")
+		foreach (sort keys %config);
 
 	1;
 } or do {
