@@ -443,9 +443,15 @@ sub load_configuration_files
 	# fix certificates and create cert_by_id
 	# 0 - copy the pem chain file referred by the 'ca' parameter to the
 	# repository of certificates
-	copy($config{est}->{ca}, "$config{certdir}/ESTCA.pem")
-		or fat("Cannot copy EST CA %s PEM file to %s: %s",
-			$config{est}->{ca}, $config{certdir}, $!);
+	if(-d $config{certdir}) {
+		copy($config{est}->{ca}, "$config{certdir}/ESTCA.pem")
+			or fat("Cannot copy EST CA %s PEM file to %s: %s",
+				$config{est}->{ca}, $config{certdir}, $!);
+	} else {
+		wrn("Certificates directory '%s' not found."
+			. " Have you forgot to execute the 'gendata' action?",
+			$config{certdir});
+	}
 
 	$config{cert_by_id}->{ESTCA} = {
 		temp      => 0,

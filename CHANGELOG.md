@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- (test) Check that the 'cert' directory exist before copying anything into it!
+
 ## [0.0.9] - 2020-11-27
 
 ### Added
