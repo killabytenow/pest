@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- (aest) Fixed typo in AEST doc.
+
 ## [0.0.8] - 2020-11-26
 
 ### Added

@@ -129,7 +129,7 @@
 .\" ========================================================================
 .\"
 .IX Title "AEST 1"
-.TH AEST 1 "2020-11-26" "perl v5.26.1" "User Contributed Perl Documentation"
+.TH AEST 1 "2020-11-27" "perl v5.26.1" "User Contributed Perl Documentation"
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -145,7 +145,7 @@ aest \- Authorizator for EST service
 \&  ./aest \-d certs add "/CN=auth subject" signer_id "/CN=assigned subject"
 \&  ./aest \-d certs list
 \&  ./aest \-d certs check aut.pem "/CN=requested subject"
-\&  ./aest \-k \-d certs check aut.pem "/CN=requested subject"
+\&  ./aest \-N \-d certs check aut.pem "/CN=requested subject"
 \&  ./aest \-D \-d certs check aut.pem "/CN=requested subject"
 \&  ./aest \-d certs reset
 .Ve
@@ -236,7 +236,7 @@ This command exits with code 0 if everything is \s-1OK,\s0 with a exit code diff
 of zero if some error happened.
 .Sp
 By default, this command removes the entry that matched succesfully with this
-authentication. If you want to keep the whitelist untouched, then add the \f(CW\*(C`\-k\*(C'\fR
+authentication. If you want to keep the whitelist untouched, then add the \f(CW\*(C`\-N\*(C'\fR
 flag parameter.
 .Sp
 Example of invocations:

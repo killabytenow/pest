@@ -360,7 +360,7 @@ aest - Authorizator for EST service
   ./aest -d certs add "/CN=auth subject" signer_id "/CN=assigned subject"
   ./aest -d certs list
   ./aest -d certs check aut.pem "/CN=requested subject"
-  ./aest -k -d certs check aut.pem "/CN=requested subject"
+  ./aest -N -d certs check aut.pem "/CN=requested subject"
   ./aest -D -d certs check aut.pem "/CN=requested subject"
   ./aest -d certs reset
 
@@ -464,7 +464,7 @@ This command exits with code 0 if everything is OK, with a exit code different
 of zero if some error happened.
 
 By default, this command removes the entry that matched succesfully with this
-authentication. If you want to keep the whitelist untouched, then add the C<-k>
+authentication. If you want to keep the whitelist untouched, then add the C<-N>
 flag parameter.
 
 Example of invocations:

@@ -7,7 +7,7 @@ SYNOPSIS
           ./aest -d certs add "/CN=auth subject" signer_id "/CN=assigned subject"
           ./aest -d certs list
           ./aest -d certs check aut.pem "/CN=requested subject"
-          ./aest -k -d certs check aut.pem "/CN=requested subject"
+          ./aest -N -d certs check aut.pem "/CN=requested subject"
           ./aest -D -d certs check aut.pem "/CN=requested subject"
           ./aest -d certs reset
 
@@ -81,7 +81,7 @@ ACTIONS
 
             By default, this command removes the entry that matched
             succesfully with this authentication. If you want to keep the
-            whitelist untouched, then add the "-k" flag parameter.
+            whitelist untouched, then add the "-N" flag parameter.
 
             Example of invocations:
 
